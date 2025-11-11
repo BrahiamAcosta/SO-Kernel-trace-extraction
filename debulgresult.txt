@@ -1,0 +1,19 @@
+Archivo: /root/kml-project/traces/training/sequential/run_1_cold/trace.txt
+Existe: True
+Tamaño: 540.07 MB
+Línea 10: sector = 234427104
+Línea 11: sector = 234427104
+Línea 23: sector = 234427112
+Línea 24: sector = 234427112
+Línea 40: sector = 234427120
+Línea 41: sector = 234427120
+Línea 53: sector = 234427128
+Línea 54: sector = 234427128
+Línea 70: sector = 234427136
+Línea 71: sector = 234427136
+Línea 84: sector = 179717944
+Línea 85: sector = 179717944
+Línea 92: sector = 180076392
+Línea 93: sector = 180076392
+
+Eventos encontrados en primeras 100 líneas: 14
