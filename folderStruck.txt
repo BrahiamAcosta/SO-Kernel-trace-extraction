@@ -1,0 +1,387 @@
+kml-project/
+└── traces
+    └── training
+        ├── metadata.csv
+        ├── mixed
+        │   ├── run_1_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_1_warm
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_2_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_2_warm
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_3_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   └── run_3_warm
+        │       ├── bw_bw.1.log
+        │       ├── bw_bw.2.log
+        │       ├── fio_output.json
+        │       ├── iops_iops.1.log
+        │       ├── iops_iops.2.log
+        │       ├── lat_clat.1.log
+        │       ├── lat_clat.2.log
+        │       ├── lat_lat.1.log
+        │       ├── lat_lat.2.log
+        │       ├── lat_slat.1.log
+        │       ├── lat_slat.2.log
+        │       ├── lttng_trace
+        │       │   └── kernel
+        │       │       ├── channel0_0
+        │       │       ├── channel0_1
+        │       │       ├── index
+        │       │       │   ├── channel0_0.idx
+        │       │       │   └── channel0_1.idx
+        │       │       └── metadata
+        │       └── trace.txt
+        ├── random
+        │   ├── run_1_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_1_warm
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_2_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_2_warm
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   ├── run_3_cold
+        │   │   ├── bw_bw.1.log
+        │   │   ├── bw_bw.2.log
+        │   │   ├── fio_output.json
+        │   │   ├── iops_iops.1.log
+        │   │   ├── iops_iops.2.log
+        │   │   ├── lat_clat.1.log
+        │   │   ├── lat_clat.2.log
+        │   │   ├── lat_lat.1.log
+        │   │   ├── lat_lat.2.log
+        │   │   ├── lat_slat.1.log
+        │   │   ├── lat_slat.2.log
+        │   │   ├── lttng_trace
+        │   │   │   └── kernel
+        │   │   │       ├── channel0_0
+        │   │   │       ├── channel0_1
+        │   │   │       ├── index
+        │   │   │       │   ├── channel0_0.idx
+        │   │   │       │   └── channel0_1.idx
+        │   │   │       └── metadata
+        │   │   └── trace.txt
+        │   └── run_3_warm
+        │       ├── bw_bw.1.log
+        │       ├── bw_bw.2.log
+        │       ├── fio_output.json
+        │       ├── iops_iops.1.log
+        │       ├── iops_iops.2.log
+        │       ├── lat_clat.1.log
+        │       ├── lat_clat.2.log
+        │       ├── lat_lat.1.log
+        │       ├── lat_lat.2.log
+        │       ├── lat_slat.1.log
+        │       ├── lat_slat.2.log
+        │       ├── lttng_trace
+        │       │   └── kernel
+        │       │       ├── channel0_0
+        │       │       ├── channel0_1
+        │       │       ├── index
+        │       │       │   ├── channel0_0.idx
+        │       │       │   └── channel0_1.idx
+        │       │       └── metadata
+        │       └── trace.txt
+        └── sequential
+            ├── run_1_cold
+            │   ├── bw_bw.1.log
+            │   ├── bw_bw.2.log
+            │   ├── fio_output.json
+            │   ├── iops_iops.1.log
+            │   ├── iops_iops.2.log
+            │   ├── lat_clat.1.log
+            │   ├── lat_clat.2.log
+            │   ├── lat_lat.1.log
+            │   ├── lat_lat.2.log
+            │   ├── lat_slat.1.log
+            │   ├── lat_slat.2.log
+            │   ├── lttng_trace
+            │   │   └── kernel
+            │   │       ├── channel0_0
+            │   │       ├── channel0_1
+            │   │       ├── index
+            │   │       │   ├── channel0_0.idx
+            │   │       │   └── channel0_1.idx
+            │   │       └── metadata
+            │   └── trace.txt
+            ├── run_1_warm
+            │   ├── bw_bw.1.log
+            │   ├── bw_bw.2.log
+            │   ├── fio_output.json
+            │   ├── iops_iops.1.log
+            │   ├── iops_iops.2.log
+            │   ├── lat_clat.1.log
+            │   ├── lat_clat.2.log
+            │   ├── lat_lat.1.log
+            │   ├── lat_lat.2.log
+            │   ├── lat_slat.1.log
+            │   ├── lat_slat.2.log
+            │   ├── lttng_trace
+            │   │   └── kernel
+            │   │       ├── channel0_0
+            │   │       ├── channel0_1
+            │   │       ├── index
+            │   │       │   ├── channel0_0.idx
+            │   │       │   └── channel0_1.idx
+            │   │       └── metadata
+            │   └── trace.txt
+            ├── run_2_cold
+            │   ├── bw_bw.1.log
+            │   ├── bw_bw.2.log
+            │   ├── fio_output.json
+            │   ├── iops_iops.1.log
+            │   ├── iops_iops.2.log
+            │   ├── lat_clat.1.log
+            │   ├── lat_clat.2.log
+            │   ├── lat_lat.1.log
+            │   ├── lat_lat.2.log
+            │   ├── lat_slat.1.log
+            │   ├── lat_slat.2.log
+            │   ├── lttng_trace
+            │   │   └── kernel
+            │   │       ├── channel0_0
+            │   │       ├── channel0_1
+            │   │       ├── index
+            │   │       │   ├── channel0_0.idx
+            │   │       │   └── channel0_1.idx
+            │   │       └── metadata
+            │   └── trace.txt
+            ├── run_2_warm
+            │   ├── bw_bw.1.log
+            │   ├── bw_bw.2.log
+            │   ├── fio_output.json
+            │   ├── iops_iops.1.log
+            │   ├── iops_iops.2.log
+            │   ├── lat_clat.1.log
+            │   ├── lat_clat.2.log
+            │   ├── lat_lat.1.log
+            │   ├── lat_lat.2.log
+            │   ├── lat_slat.1.log
+            │   ├── lat_slat.2.log
+            │   ├── lttng_trace
+            │   │   └── kernel
+            │   │       ├── channel0_0
+            │   │       ├── channel0_1
+            │   │       ├── index
+            │   │       │   ├── channel0_0.idx
+            │   │       │   └── channel0_1.idx
+            │   │       └── metadata
+            │   └── trace.txt
+            ├── run_3_cold
+            │   ├── bw_bw.1.log
+            │   ├── bw_bw.2.log
+            │   ├── fio_output.json
+            │   ├── iops_iops.1.log
+            │   ├── iops_iops.2.log
+            │   ├── lat_clat.1.log
+            │   ├── lat_clat.2.log
+            │   ├── lat_lat.1.log
+            │   ├── lat_lat.2.log
+            │   ├── lat_slat.1.log
+            │   ├── lat_slat.2.log
+            │   ├── lttng_trace
+            │   │   └── kernel
+            │   │       ├── channel0_0
+            │   │       ├── channel0_1
+            │   │       ├── index
+            │   │       │   ├── channel0_0.idx
+            │   │       │   └── channel0_1.idx
+            │   │       └── metadata
+            │   └── trace.txt
+            └── run_3_warm
+                ├── bw_bw.1.log
+                ├── bw_bw.2.log
+                ├── fio_output.json
+                ├── iops_iops.1.log
+                ├── iops_iops.2.log
+                ├── lat_clat.1.log
+                ├── lat_clat.2.log
+                ├── lat_lat.1.log
+                ├── lat_lat.2.log
+                ├── lat_slat.1.log
+                ├── lat_slat.2.log
+                ├── lttng_trace
+                │   └── kernel
+                │       ├── channel0_0
+                │       ├── channel0_1
+                │       ├── index
+                │       │   ├── channel0_0.idx
+                │       │   └── channel0_1.idx
+                │       └── metadata
+                └── trace.txt
+
+78 directories, 307 files
