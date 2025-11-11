@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Consolidador Avanzado de Dataset para Entrenamiento de Modelo Readahead
-Extrae features ricas desde trazas LTTng y métricas FIO (multi-run).
-Versión optimizada para procesar datasets grandes (18GB+)
+Extrae features desde trazas LTTng y usa métricas FIO reales como targets
 """
 
 import re
@@ -12,9 +11,7 @@ import statistics
 import sys
 from pathlib import Path
 from collections import defaultdict, Counter
-from datetime import datetime
 import multiprocessing as mp
-from functools import partial
 
 # ============================================================================
 # CONFIGURACIÓN
@@ -23,86 +20,114 @@ from functools import partial
 PROJECT_DIR = Path.home() / "kml-project"
 TRACES_DIR = PROJECT_DIR / "traces" / "training"
 OUTPUT_FILE = PROJECT_DIR / "traces" / "training_dataset_full.csv"
-WINDOW_SIZE = 0.5  # segundos (ventanas más pequeñas = más muestras)
-MIN_EVENTS_PER_WINDOW = 3  # mínimo de eventos para considerar una ventana válida
+WINDOW_SIZE = 0.5  # segundos
+MIN_EVENTS_PER_WINDOW = 5
 
 # ============================================================================
 # FUNCIONES AUXILIARES
 # ============================================================================
 
 def parse_timestamp(ts_str):
-    """Parsea timestamp en formato [HH:MM:SS.microsec]"""
+    """Parsea timestamp en formato [HH:MM:SS.nanosec]"""
     match = re.match(r'\[(\d+):(\d+):(\d+)\.(\d+)\]', ts_str)
     if match:
-        h, m, s, us = map(int, match.groups())
-        return h * 3600 + m * 60 + s + us / 1_000_000
+        h, m, s, ns = map(int, match.groups())
+        return h * 3600 + m * 60 + s + ns / 1_000_000_000
     return None
 
 
 def calculate_sequentiality(offsets):
     """
     Calcula qué tan secuencial es un patrón de acceso.
-    Retorna un valor entre 0 (completamente random) y 1 (completamente secuencial)
+    Retorna un valor entre 0 (random) y 1 (secuencial)
     """
     if len(offsets) < 2:
         return 0.0
     
     diffs = [offsets[i+1] - offsets[i] for i in range(len(offsets)-1)]
     
-    # Si todos los diffs son positivos y similares -> secuencial
-    positive_diffs = [d for d in diffs if d > 0]
-    if not positive_diffs:
+    # Contar accesos consecutivos (diferencias pequeñas y positivas)
+    positive_consecutive = sum(1 for d in diffs if 0 < d < 10000)
+    total_diffs = len(diffs)
+    
+    if total_diffs == 0:
         return 0.0
     
-    # Coeficiente de variación de los diffs positivos
-    mean_diff = statistics.mean(positive_diffs)
-    if mean_diff == 0:
-        return 0.0
-    
-    std_diff = statistics.stdev(positive_diffs) if len(positive_diffs) > 1 else 0
-    cv = std_diff / mean_diff if mean_diff > 0 else 0
-    
-    # Sequentiality score: bajo CV = más secuencial
-    sequentiality = max(0, 1 - min(cv, 1))
-    
+    sequentiality = positive_consecutive / total_diffs
     return sequentiality
 
 
+def parse_babeltrace_line(line):
+    """
+    Parsea línea de babeltrace:
+    [timestamp] (+delta) hostname event_name: { cpu_id = X }, { field = val, ... }
+    """
+    ts_match = re.match(r'\[(\d+:\d+:\d+\.\d+)\]', line)
+    if not ts_match:
+        return None
+    
+    timestamp = parse_timestamp(ts_match.group(1))
+    if timestamp is None:
+        return None
+    
+    event_match = re.search(r'\]\s+\(\+[^\)]+\)\s+\w+\s+([^:]+):', line)
+    if not event_match:
+        return None
+    
+    event_name = event_match.group(1).strip()
+    
+    fields = {}
+    field_pattern = r'(\w+)\s*=\s*([^,\}]+)'
+    for match in re.finditer(field_pattern, line):
+        field_name = match.group(1).strip()
+        field_value = match.group(2).strip()
+        
+        try:
+            if '.' in field_value:
+                fields[field_name] = float(field_value)
+            else:
+                fields[field_name] = int(field_value)
+        except ValueError:
+            fields[field_name] = field_value.strip('"')
+    
+    return {
+        'timestamp': timestamp,
+        'event_name': event_name,
+        'fields': fields
+    }
+
+
 def parse_trace_file(trace_file):
-    """
-    Parsea trace.txt y devuelve lista de eventos con timestamps y offsets.
-    Optimizado para procesar archivos grandes.
-    """
+    """Parsea trace.txt y extrae eventos de I/O"""
     events = []
     start_time = None
     
-    # Patrones de regex precompilados para mejor performance
-    ts_pattern = re.compile(r'\[(\d+:\d+:\d+\.\d+)\]')
-    sector_pattern = re.compile(r'sector\s*=\s*(\d+)')
-    index_pattern = re.compile(r'index\s*=\s*(\d+)')
-    count_pattern = re.compile(r'count\s*=\s*(\d+)')
-    
-    event_types = {
-        'block_rq_issue': 'block_io',
-        'block_rq_insert': 'block_io',
-        'block_rq_complete': 'block_complete',
-        'mm_filemap_add_to_page_cache': 'page_add',
-        'syscall_entry_read': 'syscall_read',
-        'syscall_entry_pread64': 'syscall_read',
-        'syscall_entry_readv': 'syscall_read',
-        'syscall_entry_preadv': 'syscall_read',
+    io_events = {
+        'block_rq_issue',
+        'block_rq_insert', 
+        'block_rq_complete',
+        'block_bio_queue',
+        'block_bio_remap',
+        'block_getrq'
     }
     
     try:
         with open(trace_file, 'r', errors='ignore', buffering=1024*1024) as f:
             for line in f:
-                # Extraer timestamp
-                ts_match = ts_pattern.search(line)
-                if not ts_match:
+                parsed = parse_babeltrace_line(line)
+                
+                if not parsed:
                     continue
                 
-                timestamp = parse_timestamp(ts_match.group(1))
-                if timestamp is None:
+                timestamp = parsed['timestamp']
+                event_name = parsed['event_name']
+                fields = parsed['fields']
+                
+                if event_name not in io_events:
+                    continue
+                
+                sector = fields.get('sector')
+                if sector is None:
                     continue
                 
                 if start_time is None:
@@ -110,56 +135,30 @@ def parse_trace_file(trace_file):
                 
                 rel_time = timestamp - start_time
                 
-                # Identificar tipo de evento
-                event_type = None
-                for key, val in event_types.items():
-                    if key in line:
-                        event_type = val
-                        break
+                event = {
+                    'time': rel_time,
+                    'type': event_name,
+                    'offset': sector,
+                    'size': fields.get('bytes', fields.get('nr_sector', 0)),
+                    'dev': fields.get('dev', 0)
+                }
                 
-                if not event_type:
-                    continue
-                
-                # Extraer offset (sector o page index)
-                offset = None
-                sector_match = sector_pattern.search(line)
-                if sector_match:
-                    offset = int(sector_match.group(1))
-                else:
-                    index_match = index_pattern.search(line)
-                    if index_match:
-                        offset = int(index_match.group(1)) * 8  # page index -> sectors aprox
-                
-                # Extraer tamaño si está disponible
-                size = None
-                count_match = count_pattern.search(line)
-                if count_match:
-                    size = int(count_match.group(1))
-                
-                if offset is not None:
-                    events.append({
-                        'time': rel_time,
-                        'type': event_type,
-                        'offset': offset,
-                        'size': size
-                    })
+                events.append(event)
         
         return events
     
     except Exception as e:
-        print(f"  ⚠ Error parseando {trace_file}: {e}")
+        print(f"  ⚠ Error parseando: {e}")
         return []
 
 
 def extract_features_from_window(window_events, offsets):
-    """Extrae features estadísticas de una ventana de eventos"""
+    """Extrae features estadísticas de una ventana"""
     if len(offsets) < 2:
         return None
     
-    # Diferencias consecutivas
     diffs = [abs(offsets[i+1] - offsets[i]) for i in range(len(offsets)-1)]
     
-    # Features básicas
     features = {
         'num_transactions': len(offsets),
         'mean_offset': statistics.mean(offsets),
@@ -169,7 +168,6 @@ def extract_features_from_window(window_events, offsets):
         'offset_range': max(offsets) - min(offsets),
     }
     
-    # Features de diferencias (distancias entre accesos)
     if diffs:
         features.update({
             'mean_abs_diff': statistics.mean(diffs),
@@ -178,27 +176,36 @@ def extract_features_from_window(window_events, offsets):
             'min_abs_diff': min(diffs),
             'median_abs_diff': statistics.median(diffs),
         })
+    else:
+        features.update({
+            'mean_abs_diff': 0,
+            'std_abs_diff': 0,
+            'max_abs_diff': 0,
+            'min_abs_diff': 0,
+            'median_abs_diff': 0,
+        })
     
-    # Sequentiality score
     features['sequentiality'] = calculate_sequentiality(offsets)
     
-    # Conteo de tipos de eventos
     event_counts = Counter([e['type'] for e in window_events])
-    features['count_block_io'] = event_counts.get('block_io', 0)
-    features['count_page_add'] = event_counts.get('page_add', 0)
-    features['count_syscall'] = event_counts.get('syscall_read', 0)
+    features['count_rq_issue'] = event_counts.get('block_rq_issue', 0)
+    features['count_rq_insert'] = event_counts.get('block_rq_insert', 0)
+    features['count_rq_complete'] = event_counts.get('block_rq_complete', 0)
+    features['count_bio_queue'] = event_counts.get('block_bio_queue', 0)
     
-    # Ratio de eventos
     total_events = sum(event_counts.values())
     if total_events > 0:
-        features['ratio_block_io'] = event_counts.get('block_io', 0) / total_events
-        features['ratio_page_add'] = event_counts.get('page_add', 0) / total_events
+        features['ratio_rq_issue'] = event_counts.get('block_rq_issue', 0) / total_events
+        features['ratio_bio_queue'] = event_counts.get('block_bio_queue', 0) / total_events
+    else:
+        features['ratio_rq_issue'] = 0
+        features['ratio_bio_queue'] = 0
     
     return features
 
 
 def extract_features(events, pattern, run_id, cache_state):
-    """Extrae features ventana a ventana desde eventos parseados"""
+    """Extrae features ventana a ventana"""
     if not events:
         return []
     
@@ -210,31 +217,20 @@ def extract_features(events, pattern, run_id, cache_state):
         w_start = idx * WINDOW_SIZE
         w_end = (idx + 1) * WINDOW_SIZE
         
-        # Filtrar eventos en esta ventana
         window_events = [e for e in events if w_start <= e['time'] < w_end]
         
         if len(window_events) < MIN_EVENTS_PER_WINDOW:
             continue
         
-        # Extraer offsets
-        offsets = [e['offset'] for e in window_events if e['offset'] is not None]
+        offsets = [e['offset'] for e in window_events]
         
         if len(offsets) < 2:
             continue
         
-        # Extraer features estadísticas
         window_features = extract_features_from_window(window_events, offsets)
         
         if window_features is None:
             continue
-        
-        # Target: valor óptimo de readahead según el patrón
-        # Estos valores son heurísticos basados en práctica común
-        optimal_readahead = {
-            'sequential': 2048,  # KB - lecturas grandes y consecutivas
-            'random': 16,        # KB - lecturas pequeñas y dispersas
-            'mixed': 512         # KB - balance intermedio
-        }
         
         row = {
             'run_id': run_id,
@@ -243,7 +239,6 @@ def extract_features(events, pattern, run_id, cache_state):
             'window_idx': idx,
             'time_start': round(w_start, 3),
             'time_end': round(w_end, 3),
-            'target_readahead_kb': optimal_readahead.get(pattern, 256),
             **window_features
         }
         
@@ -253,7 +248,7 @@ def extract_features(events, pattern, run_id, cache_state):
 
 
 def load_fio_metrics(run_dir):
-    """Carga métricas globales de FIO desde los archivos JSON"""
+    """Carga métricas FIO como target del modelo"""
     json_file = run_dir / "fio_output.json"
     
     if not json_file.exists():
@@ -266,24 +261,24 @@ def load_fio_metrics(run_dir):
         job = data['jobs'][0]
         read_data = job.get('read', {})
         
+        # Métricas de rendimiento observadas
         metrics = {
             'fio_iops': read_data.get('iops', 0),
             'fio_bw_kbps': read_data.get('bw', 0),
             'fio_lat_mean_us': read_data.get('lat', {}).get('mean', 0),
             'fio_lat_stddev_us': read_data.get('lat', {}).get('stddev', 0),
-            'fio_slat_mean_us': read_data.get('slat', {}).get('mean', 0),
             'fio_clat_mean_us': read_data.get('clat', {}).get('mean', 0),
         }
         
         return metrics
     
     except Exception as e:
-        print(f"  ⚠ Error cargando FIO metrics: {e}")
+        print(f"  ⚠ Error cargando FIO: {e}")
         return {}
 
 
 def process_single_run(args):
-    """Procesa un único run - diseñado para paralelización"""
+    """Procesa un run individual"""
     run_dir, pattern = args
     run_id = run_dir.name
     cache_state = 'cold' if 'cold' in run_id else 'warm'
@@ -293,30 +288,27 @@ def process_single_run(args):
     if not trace_file.exists():
         return []
     
-    print(f"  → Procesando {pattern}/{run_id} ({trace_file.stat().st_size / (1024**2):.1f} MB)")
+    file_size_mb = trace_file.stat().st_size / (1024**2)
+    print(f"  → {pattern}/{run_id} ({file_size_mb:.1f} MB)")
     
-    # Parsear eventos
     events = parse_trace_file(trace_file)
     
     if not events:
-        print(f"    ⚠ Sin eventos extraídos")
+        print(f"    ⚠ Sin eventos I/O")
         return []
     
-    print(f"    ✓ {len(events):,} eventos extraídos")
+    print(f"    ✓ {len(events):,} eventos")
     
-    # Extraer features
     features = extract_features(events, pattern, run_id, cache_state)
     
     if not features:
-        print(f"    ⚠ Sin features generadas")
+        print(f"    ⚠ Sin features")
         return []
     
-    print(f"    ✓ {len(features):,} ventanas con features")
+    print(f"    ✓ {len(features):,} ventanas")
     
-    # Cargar métricas FIO
     fio_metrics = load_fio_metrics(run_dir)
     
-    # Enriquecer features con métricas FIO
     for f in features:
         f.update(fio_metrics)
     
@@ -328,60 +320,49 @@ def process_single_run(args):
 # ============================================================================
 
 def consolidate_dataset():
-    """Función principal de consolidación"""
+    """Función principal"""
     print("=" * 80)
-    print("CONSOLIDACIÓN AVANZADA DE DATASET MULTI-RUN")
+    print("CONSOLIDACIÓN DE DATASET PARA ENTRENAMIENTO")
     print("=" * 80)
-    print(f"Directorio de trazas: {TRACES_DIR}")
-    print(f"Ventana de análisis: {WINDOW_SIZE}s")
-    print(f"Mínimo eventos por ventana: {MIN_EVENTS_PER_WINDOW}")
+    print(f"Directorio: {TRACES_DIR}")
+    print(f"Ventana: {WINDOW_SIZE}s | Min eventos: {MIN_EVENTS_PER_WINDOW}")
     print("=" * 80)
     
-    all_rows = []
     patterns = ['sequential', 'random', 'mixed']
-    
-    # Recolectar todos los runs a procesar
     runs_to_process = []
     
     for pattern in patterns:
         pattern_dir = TRACES_DIR / pattern
         
         if not pattern_dir.exists():
-            print(f"⚠ Patrón {pattern} no encontrado, saltando...")
+            print(f"⚠ {pattern} no encontrado")
             continue
         
         runs = sorted([r for r in pattern_dir.iterdir() if r.is_dir()])
         
-        print(f"\n{'='*80}")
-        print(f"Patrón: {pattern.upper()} ({len(runs)} runs)")
-        print(f"{'='*80}")
+        print(f"\n{pattern.upper()}: {len(runs)} runs")
         
         for run_dir in runs:
             runs_to_process.append((run_dir, pattern))
     
     if not runs_to_process:
-        print("\n⚠ No se encontraron runs para procesar!")
+        print("\n⚠ No hay runs para procesar!")
         return
     
-    print(f"\nTotal de runs a procesar: {len(runs_to_process)}")
-    print("\nIniciando procesamiento paralelo...\n")
+    print(f"\nTotal runs: {len(runs_to_process)}\n")
     
-    # Procesamiento paralelo (usa todos los cores disponibles)
     num_workers = max(1, mp.cpu_count() - 1)
-    print(f"Usando {num_workers} workers paralelos\n")
+    print(f"Workers paralelos: {num_workers}\n")
     
     with mp.Pool(num_workers) as pool:
         results = pool.map(process_single_run, runs_to_process)
     
-    # Consolidar resultados
+    all_rows = []
     for result in results:
         all_rows.extend(result)
     
-    # ------------------------------------------------------------------------
-    # Guardar CSV
-    # ------------------------------------------------------------------------
     if not all_rows:
-        print("\n⚠ No se generaron features. Verifica las trazas.")
+        print("\n⚠ No se generaron features!")
         return
     
     print("\n" + "="*80)
@@ -393,13 +374,13 @@ def consolidate_dataset():
         'time_start', 'time_end',
         'num_transactions', 'mean_offset', 'std_offset',
         'min_offset', 'max_offset', 'offset_range',
-        'mean_abs_diff', 'std_abs_diff', 'max_abs_diff', 'min_abs_diff', 'median_abs_diff',
+        'mean_abs_diff', 'std_abs_diff', 'max_abs_diff', 
+        'min_abs_diff', 'median_abs_diff',
         'sequentiality',
-        'count_block_io', 'count_page_add', 'count_syscall',
-        'ratio_block_io', 'ratio_page_add',
-        'fio_iops', 'fio_bw_kbps', 'fio_lat_mean_us', 'fio_lat_stddev_us',
-        'fio_slat_mean_us', 'fio_clat_mean_us',
-        'target_readahead_kb'
+        'count_rq_issue', 'count_rq_insert', 'count_rq_complete', 
+        'count_bio_queue', 'ratio_rq_issue', 'ratio_bio_queue',
+        'fio_iops', 'fio_bw_kbps', 'fio_lat_mean_us', 
+        'fio_lat_stddev_us', 'fio_clat_mean_us'
     ]
     
     with open(OUTPUT_FILE, 'w', newline='') as csvfile:
@@ -407,42 +388,44 @@ def consolidate_dataset():
         writer.writeheader()
         writer.writerows(all_rows)
     
-    # ------------------------------------------------------------------------
-    # Estadísticas
-    # ------------------------------------------------------------------------
     total = len(all_rows)
     file_size_mb = OUTPUT_FILE.stat().st_size / (1024**2)
     
-    print(f"\n✓ Dataset consolidado exitosamente!")
-    print(f"  Total de muestras: {total:,}")
-    print(f"  Tamaño archivo: {file_size_mb:.2f} MB")
+    print(f"\n✓ Dataset consolidado!")
+    print(f"  Muestras: {total:,}")
+    print(f"  Tamaño: {file_size_mb:.2f} MB")
     print(f"\nDistribución por patrón:")
     
     dist = defaultdict(int)
+    cache_dist = defaultdict(lambda: defaultdict(int))
+    
     for r in all_rows:
         dist[r['pattern']] += 1
+        cache_dist[r['pattern']][r['cache_state']] += 1
     
     for p in sorted(dist.keys()):
         count = dist[p]
         pct = count / total * 100
-        print(f"  {p:12s}: {count:8,} ({pct:5.1f}%)")
+        cold = cache_dist[p]['cold']
+        warm = cache_dist[p]['warm']
+        print(f"  {p:12s}: {count:8,} ({pct:5.1f}%) - cold: {cold:,} | warm: {warm:,}")
     
-    print(f"\n✓ Archivo guardado: {OUTPUT_FILE}")
+    print(f"\n✓ Guardado en: {OUTPUT_FILE}")
+    print("="*80)
+    print("\nNOTA: Este dataset contiene features + métricas de rendimiento FIO.")
+    print("Para entrenar, puedes usar las métricas FIO como targets o definir")
+    print("tus propios targets basados en el patrón y rendimiento observado.")
     print("="*80)
 
-
-# ============================================================================
-# MAIN
-# ============================================================================
 
 if __name__ == "__main__":
     try:
         consolidate_dataset()
     except KeyboardInterrupt:
-        print("\n\n⚠ Proceso interrumpido por el usuario")
+        print("\n\n⚠ Interrumpido")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Error fatal: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
