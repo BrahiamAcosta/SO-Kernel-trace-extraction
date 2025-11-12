@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Consolidador de Trazas I/O para Entrenamiento de Modelo ML de Readahead
-Genera un CSV con features por ventanas temporales de 5 segundos
+Genera un CSV con features por ventanas temporales de 2.5 segundos
 """
 
 import os
@@ -19,7 +19,7 @@ from datetime import datetime
 
 TRACES_DIR = Path.home() / "kml-project" / "traces" / "training"
 OUTPUT_CSV = TRACES_DIR / "consolidated_dataset.csv"
-WINDOW_SIZE_SECONDS = 5
+WINDOW_SIZE_SECONDS = 2.5
 METADATA_FILE = TRACES_DIR / "metadata.csv"
 
 # ============================================================================
