@@ -79,7 +79,7 @@ def parse_trace_file(trace_path, window_size=5):
                 window_id = int(relative_time // window_size)
                 
                 # Solo procesar ventanas dentro del runtime esperado (120s)
-                if window_id >= 24:  # 120s / 5s = 24 ventanas
+                if window_id >= 48:  # 120s / 2.5s = 48 ventanas
                     continue
                 
                 sector = int(sector)
@@ -161,7 +161,7 @@ def parse_fio_logs(run_dir, window_size=5):
                         bw_kbps = int(parts[1].strip())
                         
                         window_id = int((timestamp_ms / 1000) // window_size)
-                        if window_id < 24:
+                        if window_id < 48:
                             windows[window_id]['bw_values'].append(bw_kbps)
         except Exception as e:
             print(f"  ⚠️  Error en {bw_file.name}: {e}")
@@ -177,7 +177,7 @@ def parse_fio_logs(run_dir, window_size=5):
                         lat_ns = int(parts[1].strip())
                         
                         window_id = int((timestamp_ms / 1000) // window_size)
-                        if window_id < 24:
+                        if window_id < 48:
                             windows[window_id]['lat_values'].append(lat_ns)
         except Exception as e:
             print(f"  ⚠️  Error en {lat_file.name}: {e}")
@@ -193,7 +193,7 @@ def parse_fio_logs(run_dir, window_size=5):
                         iops = int(parts[1].strip())
                         
                         window_id = int((timestamp_ms / 1000) // window_size)
-                        if window_id < 24:
+                        if window_id < 48:
                             windows[window_id]['iops_values'].append(iops)
         except Exception as e:
             print(f"  ⚠️  Error en {iops_file.name}: {e}")
