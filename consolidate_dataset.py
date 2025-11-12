@@ -19,7 +19,21 @@ import multiprocessing as mp
 
 PROJECT_DIR = Path.home() / "kml-project"
 TRACES_DIR = PROJECT_DIR / "traces" / "training"
-OUTPUT_FILE = PROJECT_DIR / "traces" / "training_dataset_full.csv"
+
+# Verificar que el directorio existe
+if not TRACES_DIR.exists():
+    # Intentar rutas alternativas
+    alt_paths = [
+        Path.home() / "kml_project" / "traces" / "training",
+        Path("/root/kml-project/traces/training"),
+        Path("/root/kml_project/traces/training"),
+    ]
+    for alt in alt_paths:
+        if alt.exists():
+            TRACES_DIR = alt
+            PROJECT_DIR = alt.parent.parent
+            break
+OUTPUT_FILE = None  # Se configurará después de encontrar TRACES_DIR
 WINDOW_SIZE = 0.5  # segundos
 MIN_EVENTS_PER_WINDOW = 5
 
