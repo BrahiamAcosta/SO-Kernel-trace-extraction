@@ -17,23 +17,29 @@ import multiprocessing as mp
 # CONFIGURACIÓN
 # ============================================================================
 
-PROJECT_DIR = Path.home() / "kml-project"
-TRACES_DIR = PROJECT_DIR / "traces" / "training"
+# Intentar múltiples rutas posibles
+possible_paths = [
+    Path("/root/kml-project/traces/training"),
+    Path.home() / "kml-project" / "traces" / "training",
+    Path("/root/kml_project/traces/training"),
+    Path.home() / "kml_project" / "traces" / "training",
+]
 
-# Verificar que el directorio existe
-if not TRACES_DIR.exists():
-    # Intentar rutas alternativas
-    alt_paths = [
-        Path.home() / "kml_project" / "traces" / "training",
-        Path("/root/kml-project/traces/training"),
-        Path("/root/kml_project/traces/training"),
-    ]
-    for alt in alt_paths:
-        if alt.exists():
-            TRACES_DIR = alt
-            PROJECT_DIR = alt.parent.parent
-            break
-OUTPUT_FILE = None  # Se configurará después de encontrar TRACES_DIR
+TRACES_DIR = None
+for path in possible_paths:
+    if path.exists():
+        TRACES_DIR = path
+        PROJECT_DIR = path.parent.parent
+        break
+
+if TRACES_DIR is None:
+    print("❌ ERROR: No se encontró el directorio de trazas!")
+    print("Rutas buscadas:")
+    for p in possible_paths:
+        print(f"  - {p}")
+    sys.exit(1)
+
+OUTPUT_FILE = TRACES_DIR.parent / "training_dataset_full.csv"
 WINDOW_SIZE = 0.5  # segundos
 MIN_EVENTS_PER_WINDOW = 5
 
@@ -275,13 +281,16 @@ def load_fio_metrics(run_dir):
         job = data['jobs'][0]
         read_data = job.get('read', {})
         
-        # Métricas de rendimiento observadas
+        # Convertir latencias de nanosegundos a microsegundos
+        lat_ns = read_data.get('lat_ns', {})
+        clat_ns = read_data.get('clat_ns', {})
+        
         metrics = {
             'fio_iops': read_data.get('iops', 0),
             'fio_bw_kbps': read_data.get('bw', 0),
-            'fio_lat_mean_us': read_data.get('lat', {}).get('mean', 0),
-            'fio_lat_stddev_us': read_data.get('lat', {}).get('stddev', 0),
-            'fio_clat_mean_us': read_data.get('clat', {}).get('mean', 0),
+            'fio_lat_mean_us': lat_ns.get('mean', 0) / 1000,
+            'fio_lat_stddev_us': lat_ns.get('stddev', 0) / 1000,
+            'fio_clat_mean_us': clat_ns.get('mean', 0) / 1000,
         }
         
         return metrics
