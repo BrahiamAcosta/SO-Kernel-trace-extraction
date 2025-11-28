@@ -1,0 +1,10 @@
+{
+  "input_size": 5,
+  "num_classes": 3,
+  "test_accuracy": 0.9710982658959537,
+  "class_map": {
+    "0": "sequential",
+    "1": "random",
+    "2": "mixed"
+  }
+}
