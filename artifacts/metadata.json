@@ -1,0 +1,19 @@
+{
+  "num_features": 5,
+  "num_classes": 3,
+  "samples_train": 691,
+  "samples_test": 173,
+  "class_map": {
+    "0": "sequential",
+    "1": "random",
+    "2": "mixed"
+  },
+  "source": "consolidated_dataset.csv",
+  "feature_mapping": {
+    "feature_1": "trace_avg_sector_distance * 512 (distancia promedio en bytes)",
+    "feature_2": "trace_sector_jump_ratio (variabilidad)",
+    "feature_3": "trace_avg_request_size_kb * 1024 (tama\u00f1o promedio I/O en bytes)",
+    "feature_4": "1 - trace_sector_jump_ratio (ratio secuencial)",
+    "feature_5": "iops_mean (tasa de I/O)"
+  }
+}
