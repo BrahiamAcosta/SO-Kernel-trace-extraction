@@ -1,0 +1,66 @@
+# Makefile para ML Predictor Daemon (C++ optimizado)
+
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -pthread
+TARGET = ml_predictor
+
+# Rutas de LibTorch
+LIBTORCH_PATH = $(HOME)/kml-project/libtorch
+INCLUDES = -I$(LIBTORCH_PATH)/include \
+           -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
+LIBS = -L$(LIBTORCH_PATH)/lib \
+       -ltorch -lc10 -ltorch_cpu
+
+# Agregar al LD_LIBRARY_PATH en runtime
+LDFLAGS = -Wl,-rpath,$(LIBTORCH_PATH)/lib
+
+all: $(TARGET)
+
+$(TARGET): ml_predictor.cpp
+	@echo "Compilando daemon C++ optimizado..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) ml_predictor.cpp -o $(TARGET) $(LIBS) $(LDFLAGS)
+	@echo "✓ Compilación exitosa: $(TARGET)"
+
+clean:
+	rm -f $(TARGET)
+
+install: $(TARGET)
+	@echo "Copiando binario a /usr/local/bin..."
+	sudo cp $(TARGET) /usr/local/bin/
+	@echo "✓ Instalado en /usr/local/bin/ml_predictor"
+
+test: $(TARGET)
+	@echo "Iniciando daemon en modo test..."
+	./$(TARGET) ../model/artifacts/model_ts.pt
+
+benchmark: $(TARGET)
+	@echo "Ejecutando benchmark de inferencia..."
+	@python3 << 'EOF'
+	import socket
+	import struct
+	import time
+	
+	# Conectar
+	sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	sock.connect('/tmp/ml_predictor.sock')
+	
+	# Benchmark: 1000 predicciones
+	features = [5000.0, 0.05, 131072.0, 0.95, 1000.0]
+	data = struct.pack('5f', *features)
+	
+	start = time.time()
+	for i in range(1000):
+	    sock.sendall(data)
+	    response = sock.recv(4)
+	
+	elapsed = time.time() - start
+	avg_ms = (elapsed / 1000) * 1000
+	
+	print(f"1000 predicciones en {elapsed:.2f}s")
+	print(f"Promedio: {avg_ms:.3f} ms/predicción")
+	print(f"Throughput: {1000/elapsed:.0f} predicciones/segundo")
+	
+	sock.close()
+	EOF
+
+.PHONY: all clean install test benchmark
