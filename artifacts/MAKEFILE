@@ -9,7 +9,11 @@ LIBTORCH_PATH = $(HOME)/kml-project/libtorch
 INCLUDES = -I$(LIBTORCH_PATH)/include \
            -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
 LIBS = -L$(LIBTORCH_PATH)/lib \
-       -ltorch -lc10 -ltorch_cpu
+       -ltorch \
+       -ltorch_cpu \
+       -lc10 \
+       -ltorch_global_deps \
+       -lkineto
 
 # Agregar al LD_LIBRARY_PATH en runtime
 LDFLAGS = -Wl,-rpath,$(LIBTORCH_PATH)/lib
