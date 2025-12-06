@@ -6,12 +6,18 @@ TARGET_EBPF = ebpf_block_trace
 LIBTORCH_PATH = $(HOME)/kml-project/libtorch
 BCC_PATH = /usr
 
+# LLVM version
+LLVM_VERSION = 14
+LLVM_LIB_PATH = /usr/lib/llvm-$(LLVM_VERSION)/lib
+LLVM_INCLUDE_PATH = /usr/lib/llvm-$(LLVM_VERSION)/include
+
 # Includes para ml_predictor (libtorch)
 INCLUDES_TORCH = -I$(LIBTORCH_PATH)/include \
                  -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
 
-# Includes para ebpf_block_trace (BCC)
-INCLUDES_BCC = -I$(BCC_PATH)/include/bcc
+# Includes para ebpf_block_trace (BCC + LLVM)
+INCLUDES_BCC = -I$(BCC_PATH)/include/bcc \
+               -I$(LLVM_INCLUDE_PATH)
 
 # Libs para ml_predictor
 LIBS_TORCH = -L$(LIBTORCH_PATH)/lib \
@@ -21,10 +27,11 @@ LIBS_TORCH = -L$(LIBTORCH_PATH)/lib \
              -ltorch_global_deps \
              -lkineto
 
-# Libs para ebpf_block_trace (BCC)
-LIBS_BCC = -lbcc \
+# Libs para ebpf_block_trace (BCC + LLVM)
+LIBS_BCC = -L$(LLVM_LIB_PATH) \
+           -lbcc \
            -lclang \
-           -lllvm
+           -lLLVM
 
 LDFLAGS_TORCH = -Wl,-rpath,$(LIBTORCH_PATH)/lib
 
