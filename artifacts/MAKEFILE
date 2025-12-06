@@ -1,27 +1,44 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -O3 -Wall -pthread -D_GLIBCXX_USE_CXX11_ABI=1
-TARGET = ml_predictor
+TARGET_PREDICTOR = ml_predictor
+TARGET_EBPF = ebpf_block_trace
 
 LIBTORCH_PATH = $(HOME)/kml-project/libtorch
+BCC_PATH = /usr
 
-INCLUDES = -I$(LIBTORCH_PATH)/include \
-           -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
+# Includes para ml_predictor (libtorch)
+INCLUDES_TORCH = -I$(LIBTORCH_PATH)/include \
+                 -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
 
-LIBS = -L$(LIBTORCH_PATH)/lib \
-       -ltorch \
-       -ltorch_cpu \
-       -lc10 \
-       -ltorch_global_deps \
-       -lkineto
+# Includes para ebpf_block_trace (BCC)
+INCLUDES_BCC = -I$(BCC_PATH)/include/bcc
 
-LDFLAGS = -Wl,-rpath,$(LIBTORCH_PATH)/lib
+# Libs para ml_predictor
+LIBS_TORCH = -L$(LIBTORCH_PATH)/lib \
+             -ltorch \
+             -ltorch_cpu \
+             -lc10 \
+             -ltorch_global_deps \
+             -lkineto
 
-all: $(TARGET)
+# Libs para ebpf_block_trace (BCC)
+LIBS_BCC = -lbcc \
+           -lclang \
+           -lllvm
 
-$(TARGET): ml_predictor.cpp
-	@echo "Compilando daemon C++ optimizado..."
-	$(CXX) $(CXXFLAGS) $(INCLUDES) ml_predictor.cpp -o $(TARGET) $(LIBS) $(LDFLAGS)
-	@echo "✓ Compilación exitosa: $(TARGET)"
+LDFLAGS_TORCH = -Wl,-rpath,$(LIBTORCH_PATH)/lib
+
+all: $(TARGET_PREDICTOR) $(TARGET_EBPF)
+
+$(TARGET_PREDICTOR): ml_predictor.cpp
+	@echo "Compilando daemon ML predictor (C++)..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES_TORCH) ml_predictor.cpp -o $(TARGET_PREDICTOR) $(LIBS_TORCH) $(LDFLAGS_TORCH)
+	@echo "✓ Compilación exitosa: $(TARGET_PREDICTOR)"
+
+$(TARGET_EBPF): ebpf_block_trace.cpp
+	@echo "Compilando eBPF block trace collector (C++)..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES_BCC) ebpf_block_trace.cpp -o $(TARGET_EBPF) $(LIBS_BCC)
+	@echo "✓ Compilación exitosa: $(TARGET_EBPF)"
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET_PREDICTOR) $(TARGET_EBPF)

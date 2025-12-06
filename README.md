@@ -581,6 +581,150 @@ feature_5 = 1.0                                      # IOPS
 
 ---
 
+## 🔌 Componentes de Integración en el Kernel
+
+### Archivos en `artifacts/`
+
+El directorio `artifacts/` contiene todos los componentes necesarios para la integración:
+
+#### 1. **Daemon ML Predictor** (`ml_predictor.cpp`)
+- **Descripción**: Daemon en C++ que carga el modelo TorchScript y ejecuta inferencias
+- **Funcionalidad**: 
+  - Escucha en un socket Unix (`/tmp/ml_predictor.sock`)
+  - Recibe 5 características normalizadas (5 floats)
+  - Devuelve la clase predicha (1 int: 0, 1, o 2)
+- **Compilación**: `make ml_predictor` (requiere libtorch)
+- **Uso**: `./ml_predictor model_ts.pt`
+
+#### 2. **eBPF Block Trace Collector** (`ebpf_block_trace.cpp`) ⭐ **NUEVO**
+- **Descripción**: Recolector de estadísticas I/O usando eBPF (tracepoints del kernel)
+- **Funcionalidad**:
+  - Captura eventos `block:block_rq_issue` usando eBPF
+  - Agrega estadísticas en ventanas de tiempo (default: 2.5 segundos)
+  - Calcula las 5 características del modelo
+  - Envía características al daemon ML predictor
+  - Escribe readahead al sysfs según la predicción
+- **Compilación**: `make ebpf_block_trace` (requiere BCC)
+- **Uso**: `sudo ./ebpf_block_trace --device nvme0n1 --window 2500`
+- **Migración**: Migrado desde Python a C++ para unificar el stack tecnológico
+- **Ventajas**: Mejor rendimiento, menor overhead, mismo lenguaje que el daemon
+
+#### 3. **Módulo del Kernel** (`ml_predictor.c`)
+- **Descripción**: Módulo del kernel para comunicación Netlink
+- **Funcionalidad**: Permite que el kernel envíe características al daemon userspace
+- **Estado**: Preparado para integración con el sistema de readahead del kernel
+
+#### 4. **Scripts Alternativos**
+- **`ml_feature_collector.sh`**: Script bash que usa `iostat` y `perf trace` (no requiere eBPF)
+- **`ebpf_block_trace.py`**: Versión Python original (puede mantenerse como fallback)
+
+### Flujo de Integración Completo
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Kernel Linux                                                │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Block Layer (I/O requests)                           │  │
+│  └──────────────┬───────────────────────────────────────┘  │
+│                 │                                           │
+│                 ▼                                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  eBPF Tracepoints (block_rq_issue)                    │  │
+│  └──────────────┬───────────────────────────────────────┘  │
+└─────────────────┼──────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Userspace                                                   │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  ebpf_block_trace.cpp (C++)                          │  │
+│  │  - Captura eventos eBPF                               │  │
+│  │  - Agrega en ventanas de 2.5s                        │  │
+│  │  - Calcula 5 características                          │  │
+│  └──────────────┬───────────────────────────────────────┘  │
+│                 │                                           │
+│                 │ Unix Socket                               │
+│                 ▼                                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  ml_predictor.cpp (C++ Daemon)                       │  │
+│  │  - Carga model_ts.pt                                  │  │
+│  │  - Normaliza características                          │  │
+│  │  - Ejecuta inferencia                                 │  │
+│  │  - Devuelve predicción (0, 1, o 2)                   │  │
+│  └──────────────┬───────────────────────────────────────┘  │
+│                 │                                           │
+│                 │ Respuesta (int)                           │
+│                 ▼                                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  ebpf_block_trace.cpp                                 │  │
+│  │  - Mapea predicción a readahead_kb                    │  │
+│  │  - Escribe a /sys/block/DEV/queue/read_ahead_kb       │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Protocolo de Comunicación
+
+**Socket Unix**: `/tmp/ml_predictor.sock`
+
+1. **Cliente → Daemon**: 5 floats (20 bytes, little-endian)
+   ```c
+   float features[5] = {
+       avg_dist_bytes,      // [0] Distancia promedio (bytes)
+       jump_ratio,           // [1] Variabilidad (0.0-1.0)
+       avg_io_size_bytes,    // [2] Tamaño promedio I/O (bytes)
+       seq_ratio,            // [3] Ratio secuencial (0.0-1.0)
+       iops_mean             // [4] IOPS (operaciones/segundo)
+   };
+   ```
+
+2. **Daemon → Cliente**: 1 int (4 bytes)
+   ```c
+   int prediction;  // 0=sequential, 1=random, 2=mixed
+   ```
+
+### Mapeo de Predicciones a Readahead
+
+```c
+int readahead_kb;
+switch (prediction) {
+    case 0:  // sequential
+        readahead_kb = 256;
+        break;
+    case 1:  // random
+        readahead_kb = 16;
+        break;
+    case 2:  // mixed
+        readahead_kb = 64;
+        break;
+}
+```
+
+### Compilación de Componentes
+
+```bash
+cd artifacts
+
+# Compilar todo
+make
+
+# O compilar individualmente
+make ml_predictor        # Requiere libtorch
+make ebpf_block_trace    # Requiere BCC
+```
+
+**Dependencias:**
+- **libtorch**: Para `ml_predictor.cpp` (PyTorch C++ API)
+- **BCC**: Para `ebpf_block_trace.cpp` (BPF Compiler Collection)
+  - Instalación: `sudo apt-get install bpfcc-tools libbpfcc-dev`
+
+### Documentación Adicional
+
+- **`MIGRACION_EBPF_CPP.md`**: Detalles sobre la migración de Python a C++
+- **`CAMBIOS_APLICADOS.md`**: Historial de cambios en los scripts de integración
+
+---
+
 ## 🐛 Solución de Problemas
 
 ### Error: "No se encontraron trazas en 'data/raw'"
