@@ -32,20 +32,26 @@
 #define MAX_CONNECTIONS 10
 
 // Parámetros de normalización (scaler)
+// IMPORTANTE: El orden de las características debe ser:
+// [0] Distancia promedio entre offsets (bytes)
+// [1] Variabilidad (jump ratio, 0.0-1.0)
+// [2] Tamaño promedio de I/O (bytes)
+// [3] Ratio secuencial (1 - jump_ratio, 0.0-1.0)
+// [4] IOPS (operaciones por segundo)
 static const float FEATURE_MEANS[5] = {
-    5507101717.797395f,
-    0.7057386400720898f,
-    36776956.87843705f,
-    0.2942613602238343f,
-    1.0f
+    5507101717.797395f,      // [0] Media de distancia promedio
+    0.7057386400720898f,     // [1] Media de variabilidad
+    36776956.87843705f,      // [2] Media de tamaño promedio I/O
+    0.2942613602238343f,     // [3] Media de ratio secuencial
+    1.0f                      // [4] Media de IOPS
 };
 
 static const float FEATURE_STDS[5] = {
-    5067766125.424761f,
-    0.40276684902312826f,
-    23396734.483704068f,
-    0.40276684857585415f,
-    1.0f
+    5067766125.424761f,      // [0] Std de distancia promedio
+    0.40276684902312826f,    // [1] Std de variabilidad
+    23396734.483704068f,     // [2] Std de tamaño promedio I/O
+    0.40276684857585415f,    // [3] Std de ratio secuencial
+    1.0f                      // [4] Std de IOPS
 };
 
 // Mapeo de clases
@@ -53,6 +59,84 @@ static const char* CLASS_NAMES[3] = {
     "sequential",
     "random",
     "mixed"
+};
+
+// ============================================================================
+// CLASE FEATURE EXTRACTOR
+// ============================================================================
+
+/**
+ * Extrae las 5 características que espera el modelo desde datos raw de I/O.
+ * 
+ * Esta clase centraliza la lógica de cálculo de características, permitiendo
+ * que el daemon pueda recibir datos raw y calcular las características antes
+ * de normalizar y hacer inferencia.
+ */
+class FeatureExtractor {
+public:
+    /**
+     * Calcula las 5 características desde datos raw de I/O.
+     * 
+     * @param avg_sector_distance Distancia promedio entre sectores (en sectores)
+     * @param sector_jump_ratio Ratio de saltos grandes (>1MB) entre accesos (0.0-1.0)
+     * @param bw_kbps Bandwidth promedio en KB/s
+     * @param iops_mean IOPS promedio (operaciones por segundo)
+     * @param output Array de 5 floats donde se guardarán las características calculadas
+     */
+    static void extract_features(
+        float avg_sector_distance,
+        float sector_jump_ratio,
+        float bw_kbps,
+        float iops_mean,
+        float* output
+    ) {
+        // Feature 1: Distancia promedio en bytes
+        output[0] = avg_sector_distance * 512.0f;
+        
+        // Feature 2: Variabilidad (jump ratio)
+        output[1] = sector_jump_ratio;
+        
+        // Feature 3: Tamaño promedio de I/O en bytes
+        // Calculado desde bandwidth e IOPS: (bw_kbps * 1024) / iops
+        if (iops_mean > 0.001f) {
+            output[2] = (bw_kbps * 1024.0f) / iops_mean;
+        } else {
+            output[2] = 0.0f;
+        }
+        
+        // Feature 4: Ratio secuencial (inverso del jump ratio)
+        // Clamp entre 0 y 1
+        float seq_ratio = 1.0f - sector_jump_ratio;
+        if (seq_ratio < 0.0f) seq_ratio = 0.0f;
+        if (seq_ratio > 1.0f) seq_ratio = 1.0f;
+        output[3] = seq_ratio;
+        
+        // Feature 5: IOPS
+        output[4] = iops_mean;
+    }
+    
+    /**
+     * Valida que las características estén en rangos razonables.
+     * Útil para detectar errores en el cálculo.
+     */
+    static bool validate_features(const float* features) {
+        // Feature 0: Distancia promedio (debe ser >= 0)
+        if (features[0] < 0.0f) return false;
+        
+        // Feature 1: Jump ratio (debe estar entre 0 y 1)
+        if (features[1] < 0.0f || features[1] > 1.0f) return false;
+        
+        // Feature 2: Tamaño promedio I/O (debe ser >= 0)
+        if (features[2] < 0.0f) return false;
+        
+        // Feature 3: Ratio secuencial (debe estar entre 0 y 1)
+        if (features[3] < 0.0f || features[3] > 1.0f) return false;
+        
+        // Feature 4: IOPS (debe ser >= 0)
+        if (features[4] < 0.0f) return false;
+        
+        return true;
+    }
 };
 
 // ============================================================================
@@ -132,6 +216,8 @@ public:
                       << " | Features: dist=" << raw_features[0]
                       << ", jump=" << raw_features[1]
                       << ", size=" << raw_features[2]
+                      << ", seq=" << raw_features[3]
+                      << ", iops=" << raw_features[4]
                       << std::endl;
         }
         
@@ -259,6 +345,13 @@ public:
                 
                 if (bytes_read != sizeof(raw_features)) {
                     std::cerr << "⚠️  Datos incompletos: " << bytes_read << " bytes" << std::endl;
+                    close(client_fd);
+                    continue;
+                }
+                
+                // Validar características antes de predecir
+                if (!FeatureExtractor::validate_features(raw_features)) {
+                    std::cerr << "⚠️  Características inválidas recibidas" << std::endl;
                     close(client_fd);
                     continue;
                 }

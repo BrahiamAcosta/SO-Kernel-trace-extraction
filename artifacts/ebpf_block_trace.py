@@ -116,13 +116,28 @@ try:
             lat_mean_ns = 0.0  # not computed in this simple version (requires matching completes). Could be added.
         # convert avg_distance sectors -> bytes
         avg_dist_bytes = avg_dist_sectors * 512.0
-        # build features in order expected by your daemon:
-        # [avg_sector_distance_bytes, sector_jump_ratio, bw_mean_kbps, lat_mean_ns, iops_mean]
-        f0 = float(avg_dist_bytes)
-        f1 = float(jump_ratio)
-        f2 = float(bw_kbps)
-        f3 = float(lat_mean_ns)
-        f4 = float(iops_mean)
+        
+        # Calculate average I/O size in bytes: (bandwidth in bytes/s) / IOPS
+        # If IOPS is 0 or very small, use a fallback
+        if iops_mean > 0.001:
+            avg_io_size_bytes = (bw_kbps * 1024.0) / iops_mean
+        else:
+            avg_io_size_bytes = 0.0
+        
+        # Calculate sequential ratio (inverse of jump ratio)
+        seq_ratio = max(0.0, min(1.0, 1.0 - jump_ratio))
+        
+        # build features in order expected by the model:
+        # [0] avg_sector_distance_bytes: Distancia promedio entre offsets (bytes)
+        # [1] sector_jump_ratio: Variabilidad (jump ratio)
+        # [2] avg_io_size_bytes: Tamaño promedio de I/O (bytes)
+        # [3] seq_ratio: Ratio secuencial (1 - jump_ratio)
+        # [4] iops_mean: IOPS (operaciones por segundo)
+        f0 = float(avg_dist_bytes)      # Feature 1: Distancia promedio
+        f1 = float(jump_ratio)           # Feature 2: Variabilidad
+        f2 = float(avg_io_size_bytes)    # Feature 3: Tamaño promedio I/O
+        f3 = float(seq_ratio)            # Feature 4: Ratio secuencial
+        f4 = float(iops_mean)            # Feature 5: IOPS
         # send to daemon via unix socket as 5 float32
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -146,7 +161,8 @@ try:
                 try:
                     with open(path, "w") as wf:
                         wf.write(str(ra_kb))
-                    print("window: f=[%.1f,%.4f,%.1f,%.1f,%.1f] pred=%d set read_ahead_kb=%d" % (f0,f1,f2,f3,f4,pred,ra_kb))
+                    print("window: f=[dist=%.1f,jump=%.4f,size=%.1f,seq=%.4f,iops=%.1f] pred=%d(%s) set read_ahead_kb=%d" % 
+                          (f0, f1, f2, f3, f4, pred, ["sequential","random","mixed"][pred], ra_kb))
                 except Exception as e:
                     print("ERROR writing sysfs:", e)
             sock.close()

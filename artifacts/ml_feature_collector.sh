@@ -71,8 +71,28 @@ while true; do
     # 3. Latencia ns
     LATENCY_NS=$(get_latency_ns)
 
-    # 4. Features a enviar EXACTAMENTE como los usa el modelo
-    FEATURES_STR="$AVG_SECTOR_DISTANCE_BYTES $SECTOR_JUMP_RATIO $BW_KBPS $LATENCY_NS $IOPS_MEAN"
+    # 4. Calcular características según el modelo espera:
+    #    [0] Distancia promedio (bytes) - ya calculado
+    #    [1] Variabilidad (jump ratio) - ya calculado
+    #    [2] Tamaño promedio I/O (bytes) = (BW_KBPS * 1024) / IOPS_MEAN
+    #    [3] Ratio secuencial = 1 - SECTOR_JUMP_RATIO
+    #    [4] IOPS - ya calculado
+    
+    # Calcular tamaño promedio I/O
+    # Usar awk para comparación (más portable que bc)
+    AVG_IO_SIZE_BYTES=$(awk -v bw="$BW_KBPS" -v iops="$IOPS_MEAN" 'BEGIN {
+        if (iops > 0.001) {
+            print (bw * 1024.0) / iops
+        } else {
+            print 0.0
+        }
+    }')
+    
+    # Calcular ratio secuencial
+    SEQ_RATIO=$(awk -v jump="$SECTOR_JUMP_RATIO" 'BEGIN {seq = 1.0 - jump; if (seq < 0) seq = 0; if (seq > 1) seq = 1; print seq}')
+    
+    # Features a enviar EXACTAMENTE como los usa el modelo
+    FEATURES_STR="$AVG_SECTOR_DISTANCE_BYTES $SECTOR_JUMP_RATIO $AVG_IO_SIZE_BYTES $SEQ_RATIO $IOPS_MEAN"
 
     echo "Features: $FEATURES_STR"
 
