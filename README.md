@@ -319,6 +319,112 @@ Real Mixed      1    2   55
 
 ---
 
+## 🔮 Cómo Usar el Modelo para Hacer Predicciones
+
+**⚠️ IMPORTANTE:** La red neuronal **NO** calcula las características automáticamente. Tú debes:
+1. **Calcular las 5 características** desde tus datos de I/O raw
+2. **Normalizar** las características usando el scaler
+3. **Pasar** las características normalizadas a la red neuronal
+
+La red neuronal solo recibe las 5 características ya calculadas y las clasifica.
+
+### Ejemplo Rápido con Python
+
+```python
+import joblib
+import numpy as np
+import torch
+from neuronal_red import IOPatternClassifier
+
+# 1. Cargar modelo y scaler
+scaler = joblib.load("artifacts/scaler.pkl")
+model = IOPatternClassifier(input_size=5, hidden_size=32, num_classes=3)
+model.load_state_dict(torch.load("artifacts/model.pth", map_location="cpu"))
+model.eval()
+
+# 2. Preparar características (ejemplo: patrón secuencial)
+# ⚠️ NOTA: Estas características DEBEN calcularse desde tus datos de I/O raw
+# La red neuronal NO las calcula automáticamente
+# 
+# Ejemplo de cálculo:
+# - offsets = [0, 131072, 262144, ...]  # offsets de operaciones I/O
+# - avg_distance = promedio(|offsets[i+1] - offsets[i]|) * 512
+# - jump_ratio = % de saltos > 1MB
+# - etc.
+#
+# Aquí usamos valores ya calculados (basados en el dataset real):
+features = np.array([
+    102774272.0,   # [0] Distancia promedio: 200,731 sectores × 512 bytes
+    0.14,          # [1] Variabilidad (jump ratio)
+    69436416.0,    # [2] Tamaño promedio I/O: (67,809 KB/s × 1024) / 1.0 IOPS
+    0.86,          # [3] Ratio secuencial: 1.0 - 0.14
+    1.0            # [4] IOPS
+], dtype=np.float32)
+
+# 3. CRÍTICO: Normalizar las características
+features_normalized = scaler.transform(features.reshape(1, -1))
+
+# 4. Hacer predicción
+features_tensor = torch.tensor(features_normalized, dtype=torch.float32)
+with torch.no_grad():
+    logits = model(features_tensor)
+    probabilities = torch.softmax(logits, dim=1)
+    predicted_class = torch.argmax(logits, dim=1).item()
+
+# 5. Interpretar resultado
+class_map = {0: "sequential", 1: "random", 2: "mixed"}
+predicted_label = class_map[predicted_class]
+confidence = probabilities[0][predicted_class].item()
+
+print(f"Predicción: {predicted_label} (confianza: {confidence*100:.2f}%)")
+```
+
+### Script de Ejemplo Completo
+
+Ejecuta el script `predict.py` para ver ejemplos completos con los tres patrones:
+
+```bash
+python predict.py
+```
+
+Este script muestra cómo hacer predicciones con valores reales del dataset.
+
+### Valores de Ejemplo por Patrón
+
+**Para probar con datos similares a los del entrenamiento, usa estos valores:**
+
+#### Patrón Secuencial
+```python
+avg_sector_distance = 200731      # sectores
+sector_jump_ratio = 0.14          # 14%
+bw_mean_kbps = 67809             # KB/s
+iops_mean = 1.0                   # ops/s
+```
+
+#### Patrón Aleatorio
+```python
+avg_sector_distance = 19534728    # sectores
+sector_jump_ratio = 0.998          # 99.8%
+bw_mean_kbps = 7518              # KB/s
+iops_mean = 1.0                   # ops/s
+```
+
+#### Patrón Mixto
+```python
+avg_sector_distance = 7183669     # sectores
+sector_jump_ratio = 0.994          # 99.4%
+bw_mean_kbps = 39695             # KB/s
+iops_mean = 1.0                   # ops/s
+```
+
+**⚠️ IMPORTANTE:** 
+- Estos valores están basados en el dataset de entrenamiento
+- En producción, calcula las características desde tus datos reales de I/O
+- El IOPS en el dataset es constante (1.0), pero en producción deberías calcular el IOPS real
+- Siempre normaliza las características antes de pasarlas al modelo
+
+---
+
 ## 🔧 Integración en el Kernel Linux
 
 ### Contexto: ¿Qué necesita hacer tu compañero?
@@ -409,6 +515,69 @@ float logits[3] = {
 };
 // Clase predicha = índice del máximo valor
 ```
+
+### Valores Reales de Referencia para Predicciones
+
+**⚠️ IMPORTANTE:** Estos son los valores reales del dataset de entrenamiento. Usa valores similares para obtener predicciones confiables.
+
+#### Patrón Secuencial (Sequential)
+```python
+# Valores típicos basados en el dataset real:
+avg_sector_distance = 200731      # Mediana: ~200,731 sectores (~100 MB)
+sector_jump_ratio = 0.14           # Mediana: 0.14 (14% de saltos grandes)
+bw_mean_kbps = 67809              # Mediana: ~67,809 KB/s (~66 MB/s)
+iops_mean = 1.0                   # IOPS promedio
+
+# Características calculadas:
+feature_1 = 200731 * 512 = 102,774,272 bytes      # Distancia promedio
+feature_2 = 0.14                                   # Variabilidad
+feature_3 = (67809 * 1024) / 1.0 = 69,436,416 bytes  # Tamaño promedio I/O
+feature_4 = 1.0 - 0.14 = 0.86                      # Ratio secuencial
+feature_5 = 1.0                                    # IOPS
+```
+
+#### Patrón Aleatorio (Random)
+```python
+# Valores típicos basados en el dataset real:
+avg_sector_distance = 19534728    # Mediana: ~19,534,728 sectores (~9.5 GB)
+sector_jump_ratio = 0.998          # Mediana: 0.998 (99.8% de saltos grandes)
+bw_mean_kbps = 7518              # Mediana: ~7,518 KB/s (~7.3 MB/s)
+iops_mean = 1.0                  # IOPS promedio
+
+# Características calculadas:
+feature_1 = 19534728 * 512 = 10,001,780,736 bytes    # Distancia promedio
+feature_2 = 0.998                                     # Variabilidad
+feature_3 = (7518 * 1024) / 1.0 = 7,698,432 bytes    # Tamaño promedio I/O
+feature_4 = 1.0 - 0.998 = 0.002                       # Ratio secuencial
+feature_5 = 1.0                                       # IOPS
+```
+
+#### Patrón Mixto (Mixed)
+```python
+# Valores típicos basados en el dataset real:
+avg_sector_distance = 7183669     # Mediana: ~7,183,669 sectores (~3.5 GB)
+sector_jump_ratio = 0.994          # Mediana: 0.994 (99.4% de saltos grandes)
+bw_mean_kbps = 39695             # Mediana: ~39,695 KB/s (~38.7 MB/s)
+iops_mean = 1.0                  # IOPS promedio
+
+# Características calculadas:
+feature_1 = 7183669 * 512 = 3,678,038,528 bytes      # Distancia promedio
+feature_2 = 0.994                                    # Variabilidad
+feature_3 = (39695 * 1024) / 1.0 = 40,647,680 bytes # Tamaño promedio I/O
+feature_4 = 1.0 - 0.994 = 0.006                      # Ratio secuencial
+feature_5 = 1.0                                      # IOPS
+```
+
+**Rangos de Valores Observados en el Dataset:**
+
+| Característica | Sequential | Random | Mixed |
+|----------------|------------|--------|-------|
+| **Distancia promedio (sectores)** | 3,702 - 11,747,540 | 4,915 - 35,373,190 | 7,716 - 27,706,060 |
+| **Jump ratio** | 0.00 - 0.45 | 0.76 - 1.00 | 0.96 - 1.00 |
+| **Bandwidth (KB/s)** | 19,777 - 182,975 | 1,977 - 23,407 | 3,657 - 384,524 |
+| **IOPS** | 1.0 (constante) | 1.0 (constante) | 1.0 (constante) |
+
+**Nota sobre IOPS:** En este dataset, `iops_mean` es constante (1.0) para todas las muestras. En producción, deberías calcular el IOPS real basado en el número de operaciones por segundo observadas en tu ventana de tiempo.
 
 ---
 
