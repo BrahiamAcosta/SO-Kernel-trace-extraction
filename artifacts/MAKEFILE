@@ -1,0 +1,27 @@
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -pthread -D_GLIBCXX_USE_CXX11_ABI=1
+TARGET = ml_predictor
+
+LIBTORCH_PATH = $(HOME)/kml-project/libtorch
+
+INCLUDES = -I$(LIBTORCH_PATH)/include \
+           -I$(LIBTORCH_PATH)/include/torch/csrc/api/include
+
+LIBS = -L$(LIBTORCH_PATH)/lib \
+       -ltorch \
+       -ltorch_cpu \
+       -lc10 \
+       -ltorch_global_deps \
+       -lkineto
+
+LDFLAGS = -Wl,-rpath,$(LIBTORCH_PATH)/lib
+
+all: $(TARGET)
+
+$(TARGET): ml_predictor.cpp
+	@echo "Compilando daemon C++ optimizado..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) ml_predictor.cpp -o $(TARGET) $(LIBS) $(LDFLAGS)
+	@echo "✓ Compilación exitosa: $(TARGET)"
+
+clean:
+	rm -f $(TARGET)
