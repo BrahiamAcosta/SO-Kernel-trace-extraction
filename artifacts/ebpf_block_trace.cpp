@@ -56,9 +56,10 @@ static const char* CLASS_NAMES[3] = {"sequential", "random", "mixed"};
 struct BlockEvent {
     uint64_t sector;
     uint32_t bytes;
-    uint64_t timestamp_ns;
-    uint32_t rw;  // 0=read, 1=write
-};
+    uint64_t ts;
+    uint32_t rw;
+} __attribute__((packed));
+
 
 struct WindowStats {
     std::deque<uint64_t> sectors;
@@ -89,24 +90,27 @@ static const char* BPF_PROGRAM = R"(
 struct info_t {
     u64 sector;
     u32 bytes;
-    u64 ts;  // ns
-    u32 rw;  // 0 read, 1 write
-};
+    u64 ts;
+    u32 rw;
+} __attribute__((packed));
 
 BPF_PERF_OUTPUT(events);
 
 TRACEPOINT_PROBE(block, block_rq_issue) {
     struct info_t info = {};
+
     struct request *req = (struct request *)args->rq;
-    // some kernels pass sector in args->sector, others in req; try args first:
-    info.sector = args->sector;
+
+    info.sector = req->sector;
     info.bytes = args->nr_sector * 512;
     info.ts = bpf_ktime_get_ns();
-    info.rw = (args->cmd_flags & REQ_OP_MASK) == REQ_OP_WRITE;
+    info.rw = (args->rwbs[0] == 'W');  // Write si rwbs empieza por W
+
     events.perf_submit(args, &info, sizeof(info));
     return 0;
 }
 )";
+
 
 // ============================================================================
 // CLASE EBPF COLLECTOR
@@ -123,29 +127,29 @@ private:
     
     // Callback para eventos eBPF
     static void event_callback(void* cb_cookie, void* data, int data_size) {
-        EBPFBlockTrace* self = static_cast<EBPFBlockTrace*>(cb_cookie);
-        if (data_size != sizeof(BlockEvent)) {
-            return;
-        }
-        BlockEvent* event = static_cast<BlockEvent*>(data);
-        self->process_event(*event);
-    }
+    if (data_size != sizeof(BlockEvent)) return;
+
+    BlockEvent* ev = reinterpret_cast<BlockEvent*>(data);
+    EBPFBlockTrace* self = static_cast<EBPFBlockTrace*>(cb_cookie);
+    self->process_event(*ev);
+}
+
     
     void process_event(const BlockEvent& event) {
-        stats.sectors.push_back(event.sector);
-        stats.bytes_acc += event.bytes;
-        stats.reqs++;
-        
-        if (stats.last_sector != 0) {
-            int64_t d = static_cast<int64_t>(event.sector) - static_cast<int64_t>(stats.last_sector);
-            if (d < 0) d = -d;
-            // Jump si la distancia es > 1MB (en bytes: d * 512 > 1000000)
-            if (d * 512 > JUMP_THRESHOLD_BYTES) {
-                stats.jumps++;
-            }
+    stats.sectors.push_back(event.sector);
+    stats.bytes_acc += event.bytes;
+    stats.reqs++;
+
+    if (stats.last_sector != 0) {
+        int64_t d = llabs((long long)event.sector - (long long)stats.last_sector);
+        if (d * 512 > JUMP_THRESHOLD_BYTES) {
+            stats.jumps++;
         }
-        stats.last_sector = event.sector;
     }
+
+    stats.last_sector = event.sector;
+}
+
     
     // Calcular características desde estadísticas agregadas
     void calculate_features(double window_seconds, float* features) {
