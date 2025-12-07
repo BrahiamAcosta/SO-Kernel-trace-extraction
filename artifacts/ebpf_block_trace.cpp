@@ -1,5 +1,6 @@
 /*
- * ebpf_block_trace.cpp – versión para systemd (logging en syslog)
+ * ebpf_block_trace.cpp – versión para systemd - (logging en syslog)
+ *
  */
 
 #include <iostream>
@@ -17,7 +18,7 @@
 #include <getopt.h>
 #include <syslog.h>
 
-// BCC headers
+// Si tu instalación de BCC requiere otro include, cámbialo (ej: <bcc/BPF.h>)
 #include <BPF.h>
 #include <bcc_common.h>
 
@@ -25,7 +26,7 @@
 // CONFIG
 // ============================================================================
 
-#define DEFAULT_DEVICE "nvme0n1"
+#define DEFAULT_DEVICE "sda2"
 #define DEFAULT_WINDOW_MS 2500
 #define DEFAULT_SOCK_PATH "/tmp/ml_predictor.sock"
 #define JUMP_THRESHOLD_BYTES 1000000
@@ -34,16 +35,16 @@ static const int READAHEAD_MAP[3] = {256, 16, 64};
 static const char* CLASS_NAMES[3] = {"sequential", "random", "mixed"};
 
 // ============================================================================
-// Logging para systemd
+// Logging para systemd/journal
 // ============================================================================
 
-void log_msg(const std::string& msg, int level = LOG_INFO) {
+static void log_msg(const std::string& msg, int level = LOG_INFO) {
     syslog(level, "%s", msg.c_str());
 }
 
 // ============================================================================
-// DATA STRUCTURES
-// ============================================================================
+// DATA STRUCTURES (usuario-side)
+ // ============================================================================
 
 struct BlockEvent {
     uint64_t sector;
@@ -71,13 +72,17 @@ struct WindowStats {
 };
 
 // ============================================================================
-// eBPF PROGRAM
+// eBPF PROGRAM (usa campos del tracepoint; NO usa struct request)
 // ============================================================================
 
 static const char* BPF_PROGRAM = R"(
 #include <uapi/linux/ptrace.h>
 #include <linux/blkdev.h>
+#include <linux/trace_events.h>
 
+/*
+ * info_t: datos que entregaremos al userspace via perf buffer.
+ */
 struct info_t {
     u64 sector;
     u32 bytes;
@@ -87,14 +92,26 @@ struct info_t {
 
 BPF_PERF_OUTPUT(events);
 
+/*
+ * block:block_rq_issue tracepoint layout puede variar entre kernels,
+ * pero campos como sector, nr_sector y rwbs están disponibles en la mayoría
+ * de versiones modernas. Aquí usamos args->sector, args->nr_sector y args->rwbs.
+ */
 TRACEPOINT_PROBE(block, block_rq_issue) {
     struct info_t info = {};
-    struct request *req = (struct request *)args->rq;
+    // usa directamente fields del tracepoint args
+    info.sector = args->sector;
+    info.bytes  = args->nr_sector * 512;
+    info.ts     = bpf_ktime_get_ns();
 
-    info.sector = req->sector;
-    info.bytes = args->nr_sector * 512;
-    info.ts = bpf_ktime_get_ns();
-    info.rw = (args->rwbs[0] == 'W');
+    // rwbs es típicamente una small char array con 'R' / 'W' en la primera posición.
+    // Si no existe en una versión de kernel, rw quedará 0 (read) por defecto.
+    info.rw = 0;
+    // protect read of rwbs: algunos kernels siempre tienen 'rwbs' en el tracepoint
+    // comprobamos usando try/catch semántico de C no existe; asumimos presencia.
+    // Si tu kernel no tiene rwbs, esto devuelve 0 y lo considerará lectura.
+    if (args->rwbs[0] == 'W')
+        info.rw = 1;
 
     events.perf_submit(args, &info, sizeof(info));
     return 0;
@@ -115,10 +132,13 @@ private:
     bool running;
 
     static void event_callback(void* cookie, void* data, int data_size) {
-        if (data_size != sizeof(BlockEvent)) return;
+        if (!cookie) return;
+        if (data_size < (int)sizeof(BlockEvent)) return;
         EBPFBlockTrace* self = static_cast<EBPFBlockTrace*>(cookie);
-        BlockEvent* ev = reinterpret_cast<BlockEvent*>(data);
-        self->process_event(*ev);
+        BlockEvent ev;
+        // copiar de raw buffer (bcc ya deserializa según struct info_t)
+        memcpy(&ev, data, sizeof(ev));
+        self->process_event(ev);
     }
 
     void process_event(const BlockEvent& e) {
@@ -127,8 +147,10 @@ private:
         stats.reqs++;
 
         if (stats.last_sector != 0) {
-            int64_t d = llabs((long long)e.sector - (long long)stats.last_sector);
-            if (d * 512 > JUMP_THRESHOLD_BYTES) stats.jumps++;
+            long long diff = (long long)e.sector - (long long)stats.last_sector;
+            if (diff < 0) diff = -diff;
+            if ((unsigned long long)diff * 512 > (unsigned long long)JUMP_THRESHOLD_BYTES)
+                stats.jumps++;
         }
 
         stats.last_sector = e.sector;
@@ -136,44 +158,40 @@ private:
 
     void calculate_features(double window_s, float* f) {
         if (stats.reqs == 0) {
-            memset(f, 0, sizeof(float) * 5);
+            for (int i=0;i<5;i++) f[i]=0.0f;
             return;
         }
 
-        float avg_dist_sectors = 0;
+        // avg distance between consecutive sectors (in sectors)
+        double avg_sectors = 0.0;
         if (stats.sectors.size() > 1) {
-            uint64_t total = 0;
-            uint64_t cnt = 0;
+            unsigned long long totald = 0;
+            unsigned long long cnt = 0;
             uint64_t prev = 0;
             bool first = true;
-
             for (uint64_t s : stats.sectors) {
                 if (!first) {
-                    int64_t d = s - prev;
+                    long long d = (long long)s - (long long)prev;
                     if (d < 0) d = -d;
-                    total += d;
+                    totald += (unsigned long long)d;
                     cnt++;
                 }
                 prev = s;
                 first = false;
             }
-            avg_dist_sectors = (cnt > 0) ? (float)total / cnt : 0;
+            if (cnt) avg_sectors = (double)totald / (double)cnt;
         }
 
-        float avg_dist_bytes = avg_dist_sectors * 512.0f;
-        float jump_ratio = (float)stats.jumps / (float)stats.reqs;
-        float bw_kbps = (stats.bytes_acc / 1024.0f) / window_s;
-        float iops = stats.reqs / window_s;
-
-        float avg_io_bytes = (iops > 0.001f)
-                                 ? (bw_kbps * 1024.0f) / iops
-                                 : 0.0f;
-
+        float avg_bytes = (float)(avg_sectors * 512.0);
+        float jump_ratio = (stats.reqs>0) ? ((float)stats.jumps / (float)stats.reqs) : 0.0f;
+        float bw_kbps = ((float)stats.bytes_acc / 1024.0f) / (float)window_s;
+        float iops = (float)stats.reqs / (float)window_s;
+        float avg_io_bytes = (iops > 0.001f) ? ((bw_kbps * 1024.0f) / iops) : 0.0f;
         float seq_ratio = 1.0f - jump_ratio;
-        if (seq_ratio < 0) seq_ratio = 0;
-        if (seq_ratio > 1) seq_ratio = 1;
+        if (seq_ratio < 0.0f) seq_ratio = 0.0f;
+        if (seq_ratio > 1.0f) seq_ratio = 1.0f;
 
-        f[0] = avg_dist_bytes;
+        f[0] = avg_bytes;
         f[1] = jump_ratio;
         f[2] = avg_io_bytes;
         f[3] = seq_ratio;
@@ -183,29 +201,33 @@ private:
     int send_to_daemon(const float* f) {
         int sock = socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
-            log_msg("socket() failed: " + std::string(strerror(errno)), LOG_ERR);
+            log_msg(std::string("socket() failed: ") + strerror(errno), LOG_ERR);
             return -1;
         }
 
-        struct sockaddr_un addr {};
+        struct sockaddr_un addr;
+        memset(&addr,0,sizeof(addr));
         addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+        strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path)-1);
 
         if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            log_msg("connect() failed: " + std::string(strerror(errno)), LOG_WARNING);
+            log_msg(std::string("connect() failed: ") + strerror(errno), LOG_WARNING);
             close(sock);
             return -1;
         }
 
-        if (send(sock, f, 5*sizeof(float), 0) != 5*sizeof(float)) {
-            log_msg("send() error", LOG_WARNING);
+        ssize_t want = 5 * sizeof(float);
+        ssize_t s = send(sock, f, want, 0);
+        if (s != want) {
+            log_msg("send() failed or partial send", LOG_WARNING);
             close(sock);
             return -1;
         }
 
         int pred = -1;
-        if (recv(sock, &pred, sizeof(int), 0) != sizeof(int)) {
-            log_msg("recv() error", LOG_WARNING);
+        ssize_t r = recv(sock, &pred, sizeof(pred), 0);
+        if (r != (ssize_t)sizeof(pred)) {
+            log_msg("recv() failed", LOG_WARNING);
             close(sock);
             return -1;
         }
@@ -215,18 +237,18 @@ private:
     }
 
     bool write_readahead(const std::string& dev, int val) {
-        std::string path = "/sys/block/" + dev + "/queue/read_ahead_kb";
-        std::ofstream f(path);
-        if (!f.is_open()) {
-            log_msg("sysfs write failed: " + path, LOG_WARNING);
+        std::string path = std::string("/sys/block/") + dev + "/queue/read_ahead_kb";
+        std::ofstream wf(path);
+        if (!wf.is_open()) {
+            log_msg("Failed writing sysfs: " + path, LOG_WARNING);
             return false;
         }
-        f << val;
+        wf << val << std::endl;
         return true;
     }
 
 public:
-    EBPFBlockTrace(std::string dev, int winms, std::string sock)
+    EBPFBlockTrace(const std::string& dev, int winms, const std::string& sock)
         : device(dev), window_ms(winms), sock_path(sock), bpf(nullptr), running(false) {}
 
     ~EBPFBlockTrace() {
@@ -238,37 +260,37 @@ public:
             bpf = new ebpf::BPF();
             auto r1 = bpf->init(BPF_PROGRAM);
             if (r1.code() != 0) {
-                log_msg("BPF init error: " + r1.msg(), LOG_ERR);
+                log_msg(std::string("BPF init error: ") + r1.msg(), LOG_ERR);
                 return false;
             }
 
             auto r2 = bpf->open_perf_buffer("events", event_callback, nullptr, this);
             if (r2.code() != 0) {
-                log_msg("perf buffer error: " + r2.msg(), LOG_ERR);
+                log_msg(std::string("perf buffer error: ") + r2.msg(), LOG_ERR);
                 return false;
             }
 
-            log_msg("eBPF initialized");
+            log_msg("eBPF initialized", LOG_INFO);
             return true;
+        } catch (const std::exception &e) {
+            log_msg(std::string("Exception initializing BPF: ") + e.what(), LOG_ERR);
+            return false;
         } catch (...) {
-            log_msg("Exception initializing BPF", LOG_ERR);
+            log_msg("Unknown exception initializing BPF", LOG_ERR);
             return false;
         }
     }
 
     void run() {
         running = true;
-
-        log_msg("Collector started on device " + device);
-
-        double win_s = window_ms / 1000.0;
+        log_msg("Collector started on device " + device, LOG_INFO);
+        double win_s = (double)window_ms / 1000.0;
 
         while (running) {
-            auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(window_ms);
-
+            auto window_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(window_ms);
             stats.reset();
-
-            while (std::chrono::steady_clock::now() < end && running) {
+            while (std::chrono::steady_clock::now() < window_end && running) {
+                // poll perf buffer; timeout 100 ms
                 bpf->poll_perf_buffer("events", 100);
             }
 
@@ -278,16 +300,16 @@ public:
             int pred = send_to_daemon(feat);
             if (pred >= 0 && pred < 3) {
                 int ra = READAHEAD_MAP[pred];
-                write_readahead(device, ra);
-
-                log_msg(
-                    "pred=" + std::string(CLASS_NAMES[pred]) +
-                    " read_ahead_kb=" + std::to_string(ra)
-                );
+                if (write_readahead(device, ra)) {
+                    log_msg(std::string("pred=") + CLASS_NAMES[pred] + " read_ahead_kb=" + std::to_string(ra), LOG_INFO);
+                } else {
+                    log_msg("failed to write read_ahead_kb", LOG_WARNING);
+                }
+            } else {
+                log_msg("no prediction or invalid class returned", LOG_WARNING);
             }
         }
-
-        log_msg("Collector stopped.");
+        log_msg("Collector stopped.", LOG_INFO);
     }
 
     void stop() { running = false; }
@@ -296,10 +318,10 @@ public:
 // ============================================================================
 // SIGNAL HANDLER
 // ============================================================================
-static EBPFBlockTrace* g_ptr = nullptr;
 
-void handler(int s) {
-    log_msg("Signal received, stopping...");
+static EBPFBlockTrace* g_ptr = nullptr;
+static void handler(int s) {
+    log_msg("Signal received, stopping...", LOG_INFO);
     if (g_ptr) g_ptr->stop();
 }
 
@@ -318,7 +340,7 @@ int main(int argc, char* argv[]) {
         {"device", required_argument, 0, 'd'},
         {"window", required_argument, 0, 'w'},
         {"sock", required_argument, 0, 's'},
-        {0, 0, 0, 0}
+        {0,0,0,0}
     };
 
     int opt;
@@ -333,18 +355,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    EBPFBlockTrace col(device, window_ms, sock);
-    g_ptr = &col;
+    EBPFBlockTrace collector(device, window_ms, sock);
+    g_ptr = &collector;
 
     signal(SIGINT, handler);
     signal(SIGTERM, handler);
 
-    if (!col.init()) {
+    if (!collector.init()) {
         log_msg("Init failed", LOG_ERR);
+        closelog();
         return 1;
     }
 
-    col.run();
+    collector.run();
     closelog();
     return 0;
 }
