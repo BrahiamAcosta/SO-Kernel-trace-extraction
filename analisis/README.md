@@ -1,15 +1,118 @@
-# Análisis de Resultados FIO - Experimentos de Rendimiento I/O
+# Análisis de Rendimiento FIO: Baseline VM vs ML
 
-Este directorio contiene el análisis completo de los experimentos de rendimiento I/O realizados con la herramienta FIO (Flexible I/O Tester).
+Análisis comparativo completo de experimentos de I/O usando FIO entre una línea base (VM) y una implementación basada en red neuronal.
 
-## 📋 Contenido
+## 📁 Estructura
 
-- **`process_results.py`**: Script para procesar los archivos JSON de resultados y generar datasets estructurados
-- **`generate_plots.py`**: Script para generar visualizaciones completas del análisis
-- **`generate_report.py`**: Script para generar el reporte de hallazgos en formato Markdown
-- **`run_analysis.py`**: Script principal que ejecuta todo el pipeline de análisis
-- **`REPORTE_HALLAZGOS.md`**: Reporte detallado con hallazgos y conclusiones (generado)
-- Gráficas PNG (generadas tras ejecutar el análisis)
+```
+analisis/
+├── baseline/              # Análisis línea base (VM)
+│   ├── throughput_lectura.png
+│   ├── latencia_p99.png
+│   ├── resultados_detalle.csv
+│   ├── resumen_metricas.csv
+│   └── reporte_baseline.md
+├── ml/                    # Análisis Red Neuronal
+│   ├── throughput_lectura.png
+│   ├── latencia_p99.png
+│   ├── resultados_detalle.csv
+│   ├── resumen_metricas.csv
+│   └── reporte_ml.md
+├── comparativa/           # Análisis Comparativo
+│   ├── comparativa_metricas.png
+│   ├── resultados_combinados.csv
+│   ├── comparativa_metricas.csv
+│   └── reporte_comparativa.md
+├── analizar.py           # Script principal
+└── README.md             # Este archivo
+```
+
+## 🚀 Ejecución Rápida
+
+```powershell
+python analisis/analizar.py
+```
+
+El script ejecutará todo el pipeline automáticamente y generará:
+
+- 2 gráficos por implementación (throughput + latencia)
+- 1 gráfico comparativo side-by-side
+- Reportes markdown con hallazgos
+- Archivos CSV con datos detallados
+
+## 📊 Gráficos Generados
+
+### Baseline (VM)
+
+- **throughput_lectura.png**: Throughput de lectura por patrón y tamaño
+- **latencia_p99.png**: Latencia p99 de lectura
+
+### ML (Red Neuronal)
+
+- **throughput_lectura.png**: Throughput de lectura (ML)
+- **latencia_p99.png**: Latencia p99 de lectura (ML)
+
+### Comparativa
+
+- **comparativa_metricas.png**: Throughput y latencia side-by-side (Baseline vs ML)
+
+## 📈 Interpretación de Resultados
+
+### Throughput (MB/s)
+
+Mayor es mejor. Compara velocidad de lectura en diferentes patrones:
+
+- **SEQ**: Acceso secuencial (mejor caso)
+- **RAND**: Acceso aleatorio (peor caso)
+- **MIX**: Acceso mixto
+
+### Latencia p99 (ms)
+
+Menor es mejor. Percentil 99 del tiempo de respuesta.
+
+## 📄 Reportes Markdown
+
+- `baseline/reporte_baseline.md`: Resumen de hallazgos Baseline
+- `ml/reporte_ml.md`: Resumen de hallazgos ML
+- `comparativa/reporte_comparativa.md`: Análisis comparativo detallado
+
+## 📊 Archivos CSV
+
+### Detalle
+
+- `resultados_detalle.csv`: Métrica por corrida individual
+- Columnas: workload, size_label, run, op, bw_MB_s, iops, p99_ms, lat_mean_ms
+
+### Resumen
+
+- `resumen_metricas.csv`: Agregados por patrón/tamaño/operación
+- Columnas: workload, op, size_label, runs, bw_MB_s_mean, bw_MB_s_std, p99_ms_mean
+
+### Comparativa
+
+- `comparativa_metricas.csv`: Datos combinados con implementación
+- `resultados_combinados.csv`: Detalle completo con etiqueta de implementación
+
+## 🔧 Requisitos
+
+```powershell
+pip install pandas numpy matplotlib seaborn
+```
+
+## 📝 Hallazgos Clave
+
+Los reportes markdown en cada carpeta contienen:
+
+- Resumen ejecutivo con métricas principales
+- Desglose por patrón de acceso (SEQ, RAND, MIX)
+- Análisis comparativo con deltas porcentuales
+
+## 🎯 Próximos Pasos
+
+1. Revisar gráficos en cada carpeta
+2. Leer reportes markdown para interpretación
+3. Analizar CSV con herramientas adicionales si se requiere
+4. Comparar resultados entre baseline y ML en carpeta `comparativa/`
 
 ## 🚀 Inicio Rápido
 
