@@ -255,7 +255,7 @@ private:
     }
 
     bool write_readahead(const std::string& dev, int val) {
-        std::string path = std::string("/sys/block/") + dev + "/queue/read_ahead_kb";
+        std::string path = std::string("/sys/block/sda/queue/read_ahead_kb");
         std::ofstream wf(path);
         if (!wf.is_open()) {
             log_msg("Failed writing sysfs: " + path, LOG_WARNING);
