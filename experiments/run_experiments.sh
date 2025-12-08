@@ -3,10 +3,6 @@
 # ===============================
 # VALIDACIÓN DEL PARÁMETRO
 # ===============================
-if [[ "$1" != "baseline" && "$1" != "ml" ]]; then
-    echo "Uso: $0 [baseline|ml]"
-    exit 1
-fi
 
 MODE="$1"   # baseline o ml
 
