@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <csignal>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -198,7 +200,23 @@ private:
         f[4] = iops;
     }
 
+    std::string format_features(const float* f) {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(4);
+        oss << "Features=["
+            << "avg_distance_bytes=" << f[0] << ", "
+            << "jump_ratio=" << f[1] << ", "
+            << "avg_io_bytes=" << f[2] << ", "
+            << "seq_ratio=" << f[3] << ", "
+            << "iops=" << f[4]
+            << "]";
+        return oss.str();
+    }
+
     int send_to_daemon(const float* f) {
+        std::string feat_str = format_features(f);
+        log_msg("Sending to daemon: " + feat_str, LOG_INFO);
+
         int sock = socket(AF_UNIX, SOCK_STREAM, 0);
         if (sock < 0) {
             log_msg(std::string("socket() failed: ") + strerror(errno), LOG_ERR);
@@ -301,12 +319,13 @@ public:
             if (pred >= 0 && pred < 3) {
                 int ra = READAHEAD_MAP[pred];
                 if (write_readahead(device, ra)) {
-                    log_msg(std::string("pred=") + CLASS_NAMES[pred] + " read_ahead_kb=" + std::to_string(ra), LOG_INFO);
+                    log_msg(std::string("Prediction successful: class=") + CLASS_NAMES[pred] + 
+                            " read_ahead_kb=" + std::to_string(ra), LOG_INFO);
                 } else {
                     log_msg("failed to write read_ahead_kb", LOG_WARNING);
                 }
             } else {
-                log_msg("no prediction or invalid class returned", LOG_WARNING);
+                log_msg(std::string("no prediction or invalid class returned (pred=") + std::to_string(pred) + ")", LOG_WARNING);
             }
         }
         log_msg("Collector stopped.", LOG_INFO);
