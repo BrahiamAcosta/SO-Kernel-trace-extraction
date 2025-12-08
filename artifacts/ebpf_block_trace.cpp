@@ -1,7 +1,6 @@
 /*
- * ebpf_block_trace.cpp – versión corregida para systemd
- * Sin filtrado de dispositivo - captura todos los eventos
- * Ruta sysfs hardcodeada a /sys/block/sda/queue/read_ahead_kb
+ * ebpf_block_trace.cpp – versión con diagnóstico mejorado
+ * Usa múltiples tracepoints y añade debug exhaustivo
  */
 
 #include <iostream>
@@ -42,6 +41,10 @@ static const char* CLASS_NAMES[3] = {"sequential", "random", "mixed"};
 
 static void log_msg(const std::string& msg, int level = LOG_INFO) {
     syslog(level, "%s", msg.c_str());
+    // También a stderr para debug
+    if (level <= LOG_WARNING) {
+        std::cerr << msg << std::endl;
+    }
 }
 
 // ============================================================================
@@ -74,7 +77,7 @@ struct WindowStats {
 };
 
 // ============================================================================
-// eBPF PROGRAM (captura TODOS los dispositivos, sin filtrado)
+// eBPF PROGRAM - Usando block_rq_complete que es más confiable
 // ============================================================================
 
 static const char* BPF_PROGRAM = R"(
@@ -90,21 +93,67 @@ struct info_t {
 
 BPF_PERF_OUTPUT(events);
 
+// Contador para debug
+BPF_ARRAY(event_count, u64, 1);
+
+// Intentar capturar desde block_rq_complete (más universal)
+TRACEPOINT_PROBE(block, block_rq_complete) {
+    int key = 0;
+    u64 *count = event_count.lookup(&key);
+    if (count) {
+        (*count)++;
+    }
+    
+    struct info_t info = {};
+    
+    // Estos campos son estándar en block_rq_complete
+    info.sector = args->sector;
+    info.bytes  = args->nr_sector * 512;
+    info.ts     = bpf_ktime_get_ns();
+    info.rw = 0;
+    
+    // Intentar leer rwbs de forma segura
+    char rwbs_buf[8] = {};
+    bpf_probe_read_kernel(&rwbs_buf, sizeof(rwbs_buf), (void*)args->rwbs);
+    
+    // Detectar escritura
+    if (rwbs_buf[0] == 'W' || rwbs_buf[0] == 'w') {
+        info.rw = 1;
+    }
+    
+    // Solo enviar si hay datos válidos
+    if (info.bytes > 0) {
+        events.perf_submit(args, &info, sizeof(info));
+    }
+    
+    return 0;
+}
+
+// También intentar con block_rq_issue como backup
 TRACEPOINT_PROBE(block, block_rq_issue) {
+    int key = 0;
+    u64 *count = event_count.lookup(&key);
+    if (count) {
+        (*count)++;
+    }
+    
     struct info_t info = {};
     info.sector = args->sector;
     info.bytes  = args->nr_sector * 512;
     info.ts     = bpf_ktime_get_ns();
     info.rw = 0;
     
-    // Detectar escritura de forma segura
-    char rwbs_first = 0;
-    bpf_probe_read_kernel(&rwbs_first, 1, (void*)args->rwbs);
-    if (rwbs_first == 'W' || rwbs_first == 'w') {
+    char rwbs_buf[8] = {};
+    bpf_probe_read_kernel(&rwbs_buf, sizeof(rwbs_buf), (void*)args->rwbs);
+    
+    if (rwbs_buf[0] == 'W' || rwbs_buf[0] == 'w') {
         info.rw = 1;
     }
     
-    events.perf_submit(args, &info, sizeof(info));
+    if (info.bytes > 0) {
+        events.perf_submit(args, &info, sizeof(info));
+    }
+    
     return 0;
 }
 )";
@@ -121,6 +170,7 @@ private:
     ebpf::BPF* bpf;
     WindowStats stats;
     bool running;
+    uint64_t total_events_received;
 
     static void event_callback(void* cookie, void* data, int data_size) {
         if (!cookie) return;
@@ -132,6 +182,16 @@ private:
     }
 
     void process_event(const BlockEvent& e) {
+        total_events_received++;
+        
+        // Log primeros eventos para debug
+        if (total_events_received <= 5) {
+            log_msg("Event #" + std::to_string(total_events_received) + 
+                   ": sector=" + std::to_string(e.sector) + 
+                   " bytes=" + std::to_string(e.bytes) + 
+                   " rw=" + std::to_string(e.rw), LOG_INFO);
+        }
+        
         stats.sectors.push_back(e.sector);
         stats.bytes_acc += e.bytes;
         stats.reqs++;
@@ -152,7 +212,6 @@ private:
             return;
         }
 
-        // avg distance between consecutive sectors (in sectors)
         double avg_sectors = 0.0;
         if (stats.sectors.size() > 1) {
             unsigned long long totald = 0;
@@ -197,7 +256,7 @@ private:
             << "avg_io_bytes=" << f[2] << ", "
             << "seq_ratio=" << f[3] << ", "
             << "iops=" << f[4]
-            << "] (reqs=" << stats.reqs << ")";
+            << "] (reqs=" << stats.reqs << ", bytes=" << stats.bytes_acc << ")";
         return oss.str();
     }
 
@@ -243,7 +302,6 @@ private:
     }
 
     bool write_readahead(int val) {
-        // Ruta hardcodeada como indicaste
         std::string path = "/sys/block/sda/queue/read_ahead_kb";
         
         log_msg("Writing read_ahead_kb=" + std::to_string(val) + " to " + path, LOG_INFO);
@@ -256,25 +314,27 @@ private:
         wf << val << std::endl;
         wf.close();
         
-        // Verificar que se escribió correctamente
-        std::ifstream rf(path);
-        if (rf.is_open()) {
-            int read_val;
-            rf >> read_val;
-            rf.close();
-            log_msg("Verified read_ahead_kb: " + std::to_string(read_val), LOG_DEBUG);
-            if (read_val != val) {
-                log_msg("Warning: read_ahead_kb mismatch. Wrote " + std::to_string(val) + 
-                       " but read " + std::to_string(read_val), LOG_WARNING);
-            }
-        }
-        
         return true;
+    }
+
+    void check_kernel_events() {
+        // Leer contador de eventos del kernel
+        auto table = bpf->get_array_table<uint64_t>("event_count");
+        auto val = table.get_value(0);
+        log_msg("Kernel event counter: " + std::to_string(val), LOG_INFO);
+        
+        if (val == 0) {
+            log_msg("WARNING: No events detected in kernel. Tracepoint may not be active!", LOG_ERR);
+        } else if (total_events_received == 0) {
+            log_msg("WARNING: Events detected in kernel (" + std::to_string(val) + 
+                   ") but not reaching userspace!", LOG_ERR);
+        }
     }
 
 public:
     EBPFBlockTrace(const std::string& dev, int winms, const std::string& sock)
-        : device(dev), window_ms(winms), sock_path(sock), bpf(nullptr), running(false) {}
+        : device(dev), window_ms(winms), sock_path(sock), bpf(nullptr), 
+          running(false), total_events_received(0) {}
 
     ~EBPFBlockTrace() {
         if (bpf) delete bpf;
@@ -289,13 +349,14 @@ public:
                 return false;
             }
 
-            auto r2 = bpf->open_perf_buffer("events", event_callback, nullptr, this);
+            auto r2 = bpf->open_perf_buffer("events", event_callback, nullptr, this, 128);
             if (r2.code() != 0) {
                 log_msg(std::string("perf buffer error: ") + r2.msg(), LOG_ERR);
                 return false;
             }
 
             log_msg("eBPF initialized successfully (capturing all block devices)", LOG_INFO);
+            log_msg("Attached to tracepoints: block:block_rq_complete and block:block_rq_issue", LOG_INFO);
             return true;
         } catch (const std::exception &e) {
             log_msg(std::string("Exception initializing BPF: ") + e.what(), LOG_ERR);
@@ -310,23 +371,41 @@ public:
         running = true;
         log_msg("Collector started (monitoring device: " + device + ")", LOG_INFO);
         double win_s = (double)window_ms / 1000.0;
+        int window_count = 0;
 
         while (running) {
-            auto window_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(window_ms);
+            auto window_start = std::chrono::steady_clock::now();
+            auto window_end = window_start + std::chrono::milliseconds(window_ms);
             stats.reset();
             
+            uint64_t events_at_start = total_events_received;
+            
+            // Poll más agresivamente
             while (std::chrono::steady_clock::now() < window_end && running) {
-                // poll perf buffer; timeout 100 ms
-                bpf->poll_perf_buffer("events", 100);
+                bpf->poll_perf_buffer("events", 50);  // timeout reducido a 50ms
+            }
+            
+            window_count++;
+            uint64_t events_in_window = total_events_received - events_at_start;
+
+            // Diagnóstico cada ventana
+            log_msg("=== Window #" + std::to_string(window_count) + " ===", LOG_INFO);
+            log_msg("Events in window: " + std::to_string(events_in_window), LOG_INFO);
+            log_msg("Total events so far: " + std::to_string(total_events_received), LOG_INFO);
+            
+            // Verificar contador del kernel cada 5 ventanas
+            if (window_count % 5 == 0) {
+                check_kernel_events();
             }
 
-            // Log diagnóstico
             if (stats.reqs == 0) {
                 log_msg("WARNING: No I/O requests captured in this window", LOG_WARNING);
-            } else {
-                log_msg("Window completed: captured " + std::to_string(stats.reqs) + 
-                       " requests, " + std::to_string(stats.bytes_acc) + " bytes", LOG_DEBUG);
+                // Continuar sin enviar al daemon
+                continue;
             }
+
+            log_msg("Captured " + std::to_string(stats.reqs) + 
+                   " requests, " + std::to_string(stats.bytes_acc) + " bytes", LOG_INFO);
 
             float feat[5];
             calculate_features(win_s, feat);
@@ -345,7 +424,9 @@ public:
                        std::to_string(pred) + ")", LOG_WARNING);
             }
         }
-        log_msg("Collector stopped.", LOG_INFO);
+        
+        log_msg("Collector stopped. Total events received: " + 
+               std::to_string(total_events_received), LOG_INFO);
     }
 
     void stop() { running = false; }
@@ -390,9 +471,7 @@ int main(int argc, char* argv[]) {
                       << "  -d, --device <dev>   Block device (default: sda2)\n"
                       << "  -w, --window <ms>    Window size in ms (default: 2500)\n"
                       << "  -s, --sock <path>    Socket path (default: /tmp/ml_predictor.sock)\n"
-                      << "  -h, --help           Show this help\n"
-                      << "\nNote: Captures I/O from all block devices\n"
-                      << "      Writes to /sys/block/sda/queue/read_ahead_kb\n";
+                      << "  -h, --help           Show this help\n";
             return 0;
         }
     }
@@ -419,6 +498,10 @@ int main(int argc, char* argv[]) {
         closelog();
         return 1;
     }
+
+    // Mensaje inicial
+    log_msg("eBPF collector is running. Generate I/O to see events...", LOG_INFO);
+    log_msg("Test with: dd if=/dev/sda2 of=/dev/null bs=1M count=100", LOG_INFO);
 
     collector.run();
     closelog();
