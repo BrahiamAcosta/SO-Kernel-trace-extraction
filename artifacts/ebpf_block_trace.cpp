@@ -1,6 +1,7 @@
 /*
- * ebpf_block_trace.cpp – versión para systemd - (logging en syslog)
- *
+ * ebpf_block_trace.cpp – versión corregida para systemd
+ * Sin filtrado de dispositivo - captura todos los eventos
+ * Ruta sysfs hardcodeada a /sys/block/sda/queue/read_ahead_kb
  */
 
 #include <iostream>
@@ -20,7 +21,6 @@
 #include <getopt.h>
 #include <syslog.h>
 
-// Si tu instalación de BCC requiere otro include, cámbialo (ej: <bcc/BPF.h>)
 #include <BPF.h>
 #include <bcc_common.h>
 
@@ -46,7 +46,7 @@ static void log_msg(const std::string& msg, int level = LOG_INFO) {
 
 // ============================================================================
 // DATA STRUCTURES (usuario-side)
- // ============================================================================
+// ============================================================================
 
 struct BlockEvent {
     uint64_t sector;
@@ -74,17 +74,13 @@ struct WindowStats {
 };
 
 // ============================================================================
-// eBPF PROGRAM (usa campos del tracepoint; NO usa struct request)
+// eBPF PROGRAM (captura TODOS los dispositivos, sin filtrado)
 // ============================================================================
 
 static const char* BPF_PROGRAM = R"(
 #include <uapi/linux/ptrace.h>
 #include <linux/blkdev.h>
-#include <linux/trace_events.h>
 
-/*
- * info_t: datos que entregaremos al userspace via perf buffer.
- */
 struct info_t {
     u64 sector;
     u32 bytes;
@@ -94,27 +90,20 @@ struct info_t {
 
 BPF_PERF_OUTPUT(events);
 
-/*
- * block:block_rq_issue tracepoint layout puede variar entre kernels,
- * pero campos como sector, nr_sector y rwbs están disponibles en la mayoría
- * de versiones modernas. Aquí usamos args->sector, args->nr_sector y args->rwbs.
- */
 TRACEPOINT_PROBE(block, block_rq_issue) {
     struct info_t info = {};
-    // usa directamente fields del tracepoint args
     info.sector = args->sector;
     info.bytes  = args->nr_sector * 512;
     info.ts     = bpf_ktime_get_ns();
-
-    // rwbs es típicamente una small char array con 'R' / 'W' en la primera posición.
-    // Si no existe en una versión de kernel, rw quedará 0 (read) por defecto.
     info.rw = 0;
-    // protect read of rwbs: algunos kernels siempre tienen 'rwbs' en el tracepoint
-    // comprobamos usando try/catch semántico de C no existe; asumimos presencia.
-    // Si tu kernel no tiene rwbs, esto devuelve 0 y lo considerará lectura.
-    if (args->rwbs[0] == 'W')
+    
+    // Detectar escritura de forma segura
+    char rwbs_first = 0;
+    bpf_probe_read_kernel(&rwbs_first, 1, (void*)args->rwbs);
+    if (rwbs_first == 'W' || rwbs_first == 'w') {
         info.rw = 1;
-
+    }
+    
     events.perf_submit(args, &info, sizeof(info));
     return 0;
 }
@@ -138,7 +127,6 @@ private:
         if (data_size < (int)sizeof(BlockEvent)) return;
         EBPFBlockTrace* self = static_cast<EBPFBlockTrace*>(cookie);
         BlockEvent ev;
-        // copiar de raw buffer (bcc ya deserializa según struct info_t)
         memcpy(&ev, data, sizeof(ev));
         self->process_event(ev);
     }
@@ -209,7 +197,7 @@ private:
             << "avg_io_bytes=" << f[2] << ", "
             << "seq_ratio=" << f[3] << ", "
             << "iops=" << f[4]
-            << "]";
+            << "] (reqs=" << stats.reqs << ")";
         return oss.str();
     }
 
@@ -254,14 +242,33 @@ private:
         return pred;
     }
 
-    bool write_readahead(const std::string& dev, int val) {
-        std::string path = std::string("/sys/block/sda/queue/read_ahead_kb");
+    bool write_readahead(int val) {
+        // Ruta hardcodeada como indicaste
+        std::string path = "/sys/block/sda/queue/read_ahead_kb";
+        
+        log_msg("Writing read_ahead_kb=" + std::to_string(val) + " to " + path, LOG_INFO);
+        
         std::ofstream wf(path);
         if (!wf.is_open()) {
-            log_msg("Failed writing sysfs: " + path, LOG_WARNING);
+            log_msg("Failed writing sysfs: " + path + " - " + strerror(errno), LOG_WARNING);
             return false;
         }
         wf << val << std::endl;
+        wf.close();
+        
+        // Verificar que se escribió correctamente
+        std::ifstream rf(path);
+        if (rf.is_open()) {
+            int read_val;
+            rf >> read_val;
+            rf.close();
+            log_msg("Verified read_ahead_kb: " + std::to_string(read_val), LOG_DEBUG);
+            if (read_val != val) {
+                log_msg("Warning: read_ahead_kb mismatch. Wrote " + std::to_string(val) + 
+                       " but read " + std::to_string(read_val), LOG_WARNING);
+            }
+        }
+        
         return true;
     }
 
@@ -288,7 +295,7 @@ public:
                 return false;
             }
 
-            log_msg("eBPF initialized", LOG_INFO);
+            log_msg("eBPF initialized successfully (capturing all block devices)", LOG_INFO);
             return true;
         } catch (const std::exception &e) {
             log_msg(std::string("Exception initializing BPF: ") + e.what(), LOG_ERR);
@@ -301,15 +308,24 @@ public:
 
     void run() {
         running = true;
-        log_msg("Collector started on device " + device, LOG_INFO);
+        log_msg("Collector started (monitoring device: " + device + ")", LOG_INFO);
         double win_s = (double)window_ms / 1000.0;
 
         while (running) {
             auto window_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(window_ms);
             stats.reset();
+            
             while (std::chrono::steady_clock::now() < window_end && running) {
                 // poll perf buffer; timeout 100 ms
                 bpf->poll_perf_buffer("events", 100);
+            }
+
+            // Log diagnóstico
+            if (stats.reqs == 0) {
+                log_msg("WARNING: No I/O requests captured in this window", LOG_WARNING);
+            } else {
+                log_msg("Window completed: captured " + std::to_string(stats.reqs) + 
+                       " requests, " + std::to_string(stats.bytes_acc) + " bytes", LOG_DEBUG);
             }
 
             float feat[5];
@@ -318,14 +334,15 @@ public:
             int pred = send_to_daemon(feat);
             if (pred >= 0 && pred < 3) {
                 int ra = READAHEAD_MAP[pred];
-                if (write_readahead(device, ra)) {
+                if (write_readahead(ra)) {
                     log_msg(std::string("Prediction successful: class=") + CLASS_NAMES[pred] + 
                             " read_ahead_kb=" + std::to_string(ra), LOG_INFO);
                 } else {
-                    log_msg("failed to write read_ahead_kb", LOG_WARNING);
+                    log_msg("Failed to write read_ahead_kb", LOG_WARNING);
                 }
             } else {
-                log_msg(std::string("no prediction or invalid class returned (pred=") + std::to_string(pred) + ")", LOG_WARNING);
+                log_msg(std::string("No prediction or invalid class returned (pred=") + 
+                       std::to_string(pred) + ")", LOG_WARNING);
             }
         }
         log_msg("Collector stopped.", LOG_INFO);
@@ -359,20 +376,36 @@ int main(int argc, char* argv[]) {
         {"device", required_argument, 0, 'd'},
         {"window", required_argument, 0, 'w'},
         {"sock", required_argument, 0, 's'},
+        {"help", no_argument, 0, 'h'},
         {0,0,0,0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "d:w:s:", long_opts, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:w:s:h", long_opts, nullptr)) != -1) {
         if (opt == 'd') device = optarg;
         else if (opt == 'w') window_ms = atoi(optarg);
         else if (opt == 's') sock = optarg;
+        else if (opt == 'h') {
+            std::cout << "Usage: " << argv[0] << " [options]\n"
+                      << "  -d, --device <dev>   Block device (default: sda2)\n"
+                      << "  -w, --window <ms>    Window size in ms (default: 2500)\n"
+                      << "  -s, --sock <path>    Socket path (default: /tmp/ml_predictor.sock)\n"
+                      << "  -h, --help           Show this help\n"
+                      << "\nNote: Captures I/O from all block devices\n"
+                      << "      Writes to /sys/block/sda/queue/read_ahead_kb\n";
+            return 0;
+        }
     }
 
     if (geteuid() != 0) {
         log_msg("Must run as root", LOG_ERR);
+        std::cerr << "ERROR: Must run as root\n";
         return 1;
     }
+
+    log_msg("Starting ebpf-blocktrace with device=" + device + 
+            " window_ms=" + std::to_string(window_ms) + 
+            " sock=" + sock, LOG_INFO);
 
     EBPFBlockTrace collector(device, window_ms, sock);
     g_ptr = &collector;
@@ -381,7 +414,8 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, handler);
 
     if (!collector.init()) {
-        log_msg("Init failed", LOG_ERR);
+        log_msg("Initialization failed", LOG_ERR);
+        std::cerr << "ERROR: Initialization failed. Check syslog for details.\n";
         closelog();
         return 1;
     }
