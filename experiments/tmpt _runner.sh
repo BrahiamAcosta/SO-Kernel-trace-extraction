@@ -37,6 +37,12 @@ run_fio() {
         # Baseline: mantener valor fijo
         echo 128 > /sys/block/${BLOCK_DEVICE}/queue/read_ahead_kb
     fi
+
+    # Leer y registrar el valor actual de read_ahead
+    CURRENT_READAHEAD=$(cat /sys/block/${BLOCK_DEVICE}/queue/read_ahead_kb)
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "$TIMESTAMP | $access | $size | $CURRENT_READAHEAD" >> "$READAHEAD_LOG"
+    
     
     for (( r=1; r<=REPEAT; r++ )); do
         logfile="${outdir}/result_${size}_run${r}.json"
